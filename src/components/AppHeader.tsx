@@ -42,10 +42,10 @@ export default function AppHeader({
         animate={{ y: 0, opacity: 1 }}
         transition={{ type: 'spring', stiffness: 300, damping: 28, delay: 0.1 }}
         className={cn(
-          'pointer-events-auto flex w-full items-center gap-2 glass-strong rounded-full shadow-[0_8px_32px_rgba(28,26,23,0.08)] transition-[max-width,padding] duration-300 ease-out sm:gap-2.5',
+          'pointer-events-auto flex w-full items-center gap-1.5 glass-strong rounded-full shadow-[0_8px_32px_rgba(28,26,23,0.08)] transition-[max-width,padding] duration-300 ease-out sm:gap-2.5',
           showCategories
-            ? 'max-w-4xl px-2.5 py-2 sm:px-3 sm:py-2.5'
-            : 'max-w-[min(100%,24rem)] px-2.5 py-2 sm:max-w-[30rem] sm:px-3 sm:py-2'
+            ? 'max-w-4xl px-2 py-2 sm:px-3 sm:py-2.5'
+            : 'max-w-[min(100%,24rem)] px-2 py-2 sm:max-w-[30rem] sm:px-3 sm:py-2'
         )}
       >
         <button
@@ -84,14 +84,14 @@ export default function AppHeader({
           type="button"
           onClick={onMyRoomClick}
           className={cn(
-            'relative flex shrink-0 items-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold transition-all duration-200 active:scale-95',
-            'bg-bronze text-cream shadow-[0_2px_12px_rgba(184,114,58,0.30)] hover:bg-bronze/90'
+            'relative flex shrink-0 items-center justify-center rounded-full transition-all duration-200 active:scale-95',
+            'bg-bronze text-cream shadow-[0_2px_12px_rgba(184,114,58,0.30)] hover:bg-bronze/90',
+            'h-9 w-9 sm:h-auto sm:w-auto sm:gap-1.5 sm:px-3 sm:py-2'
           )}
           aria-label="Open room visualizer"
         >
-          <Home className="h-3.5 w-3.5" strokeWidth={1.75} />
-          <span className="hidden sm:inline">Room visualizer</span>
-          <Sparkles className="h-3 w-3 opacity-80 sm:hidden" strokeWidth={2} />
+          <Home className="h-[16px] w-[16px] sm:h-3.5 sm:w-3.5" strokeWidth={1.75} />
+          <span className="hidden text-xs font-semibold sm:inline">Room visualizer</span>
           {(hasSavedRoom || stagedCount > 0) && (
             <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-cream ring-2 ring-bronze" />
           )}

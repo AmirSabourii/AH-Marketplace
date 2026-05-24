@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Hero from './components/Hero';
 import ProductMasonryGrid from './components/ProductMasonryGrid';
 import ProductSheet from './components/ProductSheet';
 import AppHeader from './components/AppHeader';
 import VisualizerHeader from './components/VisualizerHeader';
-import FloatingAIAssistant from './components/FloatingAIAssistant';
+import AIAssistantShell from './components/AIAssistantShell';
 import TryInMyRoomView from './components/TryInMyRoomView';
-import MobileNavBar from './components/MobileNavBar';
+import { useMediaQuery } from './hooks/useMediaQuery';
+import type { AIContext } from './types/ai';
+
 import UploadFlow from './components/UploadFlow';
 import { cn } from './lib/cn';
 import { type CategoryId } from './data/categories';
@@ -113,6 +115,15 @@ function App() {
   }, [refreshSavedRoomFlag]);
 
   useEffect(() => {
+    if (!tryInRoomOpen || window.matchMedia('(min-width: 1024px)').matches) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [tryInRoomOpen]);
+
+  useEffect(() => {
     const observer = new IntersectionObserver(
       ([entry]) => {
         setIsHeroVisible(entry.isIntersecting);
@@ -132,6 +143,7 @@ function App() {
   }, []);
 
   const scrollToGrid = useCallback(() => {
+    if (!window.matchMedia('(min-width: 1024px)').matches) return;
     document.getElementById('products-grid')?.scrollIntoView({ behavior: 'smooth' });
   }, []);
 
@@ -176,10 +188,16 @@ function App() {
         setActiveStagedProductId(product.id);
         return;
       }
+      setAiOpen(false);
       setActiveProduct(product);
     },
     [tryInRoomOpen]
   );
+
+  const openCart = useCallback(() => {
+    setAiOpen(false);
+    setCartOpen(true);
+  }, []);
 
   const selectProductColor = useCallback((productId: string, variantId: string) => {
     setColorSelections((prev) => ({ ...prev, [productId]: variantId }));
@@ -201,6 +219,14 @@ function App() {
       });
       return next;
     });
+  }, []);
+
+  const handleStageProduct = useCallback((product: Product) => {
+    setStagedProducts((prev) => {
+      if (prev.some((p) => p.id === product.id)) return prev;
+      return [...prev, product];
+    });
+    setActiveStagedProductId(product.id);
   }, []);
 
   const handleElementPersonalize = useCallback(
@@ -310,11 +336,49 @@ function App() {
   const cartCount = getCartCount(cartItems);
   const stagedCount = stagedProducts.length;
 
-  const handleOpenAI = (product?: Product | null, query?: string) => {
-    setAiContextProduct(product || null);
-    if (query) setAiInitialQuery(query);
-    setAiOpen(true);
-  };
+  const isDesktop = useMediaQuery('(min-width: 768px)');
+
+  const aiContext = useMemo((): AIContext => {
+    const stagedActive = stagedProducts.find((p) => p.id === activeStagedProductId);
+    const product = aiContextProduct ?? activeProduct ?? stagedActive ?? null;
+
+    let surface: AIContext['surface'] = 'home';
+    if (tryInRoomOpen) surface = 'visualizer';
+    else if (product && (aiContextProduct || activeProduct)) surface = 'product';
+
+    return {
+      surface,
+      product,
+      categoryId: selectedCategory,
+      stagedProducts: tryInRoomOpen ? stagedProducts : undefined,
+    };
+  }, [
+    aiContextProduct,
+    activeProduct,
+    activeStagedProductId,
+    stagedProducts,
+    selectedCategory,
+    tryInRoomOpen,
+  ]);
+
+  const showAiCollapsed =
+    !tryInRoomOpen &&
+    !aiOpen &&
+    !cartOpen &&
+    !userModalOpen &&
+    !(activeProduct && !isDesktop) &&
+    (!isHeroVisible || heroChatActive);
+
+  const handleOpenAI = useCallback(
+    (opts?: { product?: Product | null; query?: string }) => {
+      setAiContextProduct(opts?.product ?? null);
+      setAiInitialQuery(opts?.query?.trim() ?? '');
+      setActiveProduct(null);
+      setCartOpen(false);
+      setAiOpen(true);
+    },
+    []
+  );
 
   const handleBackToShop = useCallback(() => {
     closeVisualizer();
@@ -322,26 +386,34 @@ function App() {
 
   return (
     <>
-      <AppHeader
-        cartCount={cartCount}
-        onCartClick={() => setCartOpen(true)}
-        onUserClick={() => setUserModalOpen(true)}
-        onMyRoomClick={() => openVisualizer()}
-        selectedCategory={selectedCategory}
-        onCategorySelect={handleCategorySelect}
-        showCategories={!isHeroVisible && !tryInRoomOpen}
-        tryInRoomActive={tryInRoomOpen}
-        hasSavedRoom={hasSavedRoom}
-        stagedCount={stagedCount}
-        onLogoClick={() => {
-          closeSheet();
-          closeVisualizer();
-          setCartOpen(false);
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-      />
+      <div className={cn(tryInRoomOpen && 'max-lg:hidden')}>
+        <AppHeader
+          cartCount={cartCount}
+          onCartClick={openCart}
+          onUserClick={() => setUserModalOpen(true)}
+          onMyRoomClick={() => openVisualizer()}
+          selectedCategory={selectedCategory}
+          onCategorySelect={handleCategorySelect}
+          showCategories={!isHeroVisible && !tryInRoomOpen}
+          tryInRoomActive={tryInRoomOpen}
+          hasSavedRoom={hasSavedRoom}
+          stagedCount={stagedCount}
+          onLogoClick={() => {
+            closeSheet();
+            closeVisualizer();
+            setCartOpen(false);
+            setAiOpen(false);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+        />
+      </div>
 
-      <div className="flex min-h-screen w-full overflow-hidden bg-cream">
+      <div
+        className={cn(
+          'flex min-h-screen w-full overflow-hidden bg-cream',
+          tryInRoomOpen && 'max-lg:hidden'
+        )}
+      >
         <motion.main
           className={cn(
             'relative flex h-screen flex-col overflow-y-auto no-scrollbar transition-all duration-700 ease-[cubic-bezier(0.32,0.72,0,1)]',
@@ -355,7 +427,7 @@ function App() {
             <Hero
               selectedCategory={selectedCategory}
               onCategorySelect={handleCategorySelect}
-              onPromptSubmit={(query) => handleOpenAI(null, query)}
+              onPromptSubmit={(query) => handleOpenAI({ query })}
               onUpload={() => setUploadOpen(true)}
               chatActive={heroChatActive}
             />
@@ -366,7 +438,7 @@ function App() {
             onProductClick={openProduct}
             onTryInRoom={handleTryInRoom}
             onCategorySelect={handleCategorySelect}
-            onOpenAI={() => handleOpenAI(null)}
+            onOpenAI={() => handleOpenAI()}
             onOpenVisualizer={() => openVisualizer()}
             isSidebar={tryInRoomOpen}
             hasSavedRoom={hasSavedRoom}
@@ -386,10 +458,12 @@ function App() {
                 cartCount={cartCount}
                 stagedCount={stagedCount}
                 onBackToShop={handleBackToShop}
-                onCartClick={() => setCartOpen(true)}
+                onCartClick={openCart}
+                onOpenAI={() => handleOpenAI()}
                 chrome={visualizerChrome}
               />
               <TryInMyRoomView
+                variant="desktop"
                 products={stagedProducts}
                 activeProductId={activeStagedProductId}
                 colorSelections={colorSelections}
@@ -402,42 +476,30 @@ function App() {
                 registerRoomPhotoPicker={registerRoomPhotoPicker}
                 onAddToCart={(product) => handleAddToCart(product)}
                 onElementPersonalize={handleElementPersonalize}
+                onOpenAI={(product) => handleOpenAI({ product: product ?? null })}
               />
             </motion.div>
           )}
         </AnimatePresence>
       </div>
 
-      {!tryInRoomOpen && (
-        <FloatingAIAssistant
-          visible={!isHeroVisible || aiOpen}
-          isExpanded={aiOpen}
-          onExpandedChange={setAiOpen}
-          contextProduct={aiContextProduct}
-          initialQuery={aiInitialQuery}
-          onClearInitialQuery={() => setAiInitialQuery('')}
-          onChatActiveChange={setHeroChatActive}
-        />
-      )}
-
-      {!tryInRoomOpen && (
-        <MobileNavBar
-          cartCount={cartCount}
-          tryInRoomActive={false}
-          hasSavedRoom={hasSavedRoom}
-          stagedCount={stagedCount}
-          onShopClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-          onMyRoomClick={() => openVisualizer()}
-          onCartClick={() => setCartOpen(true)}
-        />
-      )}
+      <AIAssistantShell
+        open={aiOpen}
+        onOpenChange={setAiOpen}
+        context={aiContext}
+        initialQuery={aiInitialQuery}
+        onClearInitialQuery={() => setAiInitialQuery('')}
+        showCollapsed={showAiCollapsed}
+        placement={tryInRoomOpen ? 'visualizer' : 'shop'}
+        onChatActiveChange={setHeroChatActive}
+      />
 
       <ProductSheet
         product={activeProduct}
         colorSelections={colorSelections}
         onColorSelect={selectProductColor}
         onTryInRoom={handleTryInRoom}
-        onOpenAI={() => handleOpenAI(activeProduct)}
+        onOpenAI={() => handleOpenAI({ product: activeProduct })}
         onClose={closeSheet}
         onAddToCart={() => handleAddToCart(activeProduct)}
       />
@@ -468,24 +530,11 @@ function App() {
         onLogout={() => setUser(null)}
       />
 
-      <AnimatePresence>
-        {tryInRoomOpen && (
-          <motion.div
-            initial={{ y: '100%' }}
-            animate={{ y: 0 }}
-            exit={{ y: '100%' }}
-            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-            className="relative fixed inset-0 z-50 h-[100dvh] w-full bg-ink lg:hidden"
-          >
-            <VisualizerHeader
-              cartCount={cartCount}
-              stagedCount={stagedCount}
-              onBackToShop={handleBackToShop}
-              onCartClick={() => setCartOpen(true)}
-              chrome={visualizerChrome}
-            />
-            <TryInMyRoomView
-              products={stagedProducts}
+      {tryInRoomOpen && (
+        <div className="fixed inset-0 z-50 flex h-[100dvh] w-full flex-col overflow-hidden bg-ink lg:hidden">
+          <TryInMyRoomView
+            variant="mobile"
+            products={stagedProducts}
               activeProductId={activeStagedProductId}
               colorSelections={colorSelections}
               onColorSelect={selectProductColor}
@@ -497,10 +546,15 @@ function App() {
               registerRoomPhotoPicker={registerRoomPhotoPicker}
               onAddToCart={(product) => handleAddToCart(product)}
               onElementPersonalize={handleElementPersonalize}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
+              onCartClick={openCart}
+              cartCount={cartCount}
+              selectedCategory={selectedCategory}
+              onCategorySelect={handleCategorySelect}
+              onStageProduct={handleStageProduct}
+            onOpenAI={(product) => handleOpenAI({ product: product ?? null })}
+          />
+        </div>
+      )}
     </>
   );
 }

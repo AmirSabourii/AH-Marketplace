@@ -4,6 +4,7 @@ import {
   Check,
   Home,
   ImagePlus,
+  MessageCircle,
   Share2,
   ShoppingBag,
   SlidersHorizontal,
@@ -20,6 +21,7 @@ interface VisualizerHeaderProps {
   stagedCount?: number;
   onBackToShop?: () => void;
   onCartClick?: () => void;
+  onOpenAI?: () => void;
   chrome?: VisualizerChromeState;
 }
 
@@ -29,6 +31,7 @@ export default function VisualizerHeader({
   stagedCount = 0,
   onBackToShop,
   onCartClick,
+  onOpenAI,
   chrome,
 }: VisualizerHeaderProps) {
   const {
@@ -139,6 +142,20 @@ export default function VisualizerHeader({
         </button>
 
         <HeaderDivider />
+
+        {onOpenAI && (
+          <>
+            <button
+              type="button"
+              onClick={onOpenAI}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-cream/90 transition-all duration-200 hover:bg-white/10 active:scale-95"
+              aria-label="Open AI designer"
+            >
+              <MessageCircle className="h-4 w-4 text-bronze-soft" strokeWidth={1.75} />
+            </button>
+            <HeaderDivider />
+          </>
+        )}
 
         <button
           type="button"

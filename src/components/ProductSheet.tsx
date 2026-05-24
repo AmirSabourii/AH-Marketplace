@@ -293,7 +293,7 @@ function ProductSheetDetail({
             transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
             src={displayImage}
             alt={product.name}
-            className="relative aspect-[16/10] w-full object-contain p-5 mix-blend-multiply"
+            className="relative aspect-[4/3] w-full object-contain p-3 mix-blend-multiply"
           />
         </div>
 
@@ -416,7 +416,7 @@ export default function ProductSheet({
               initial="hidden"
               animate="visible"
               exit="exit"
-              className="fixed inset-x-0 bottom-0 z-50 flex max-h-[min(88dvh,640px)] flex-col rounded-t-[1.75rem] glass-panel shadow-[0_-8px_40px_rgba(28,26,23,0.10)]"
+              className="fixed inset-x-0 bottom-0 z-50 flex max-h-[min(92dvh,700px)] flex-col rounded-t-[1.75rem] glass-panel shadow-[0_-8px_40px_rgba(28,26,23,0.10)]"
             >
               <div className="flex shrink-0 justify-center pt-3 pb-1">
                 <span className="h-1 w-8 rounded-full bg-ink/20" aria-hidden />

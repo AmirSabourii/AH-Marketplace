@@ -38,7 +38,7 @@ export default function CategoryImagePicker({
               type="button"
               onClick={() => onSelectCategory(cat.id)}
               className={cn(
-                'shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-200 sm:px-3.5 sm:text-[13px]',
+                'shrink-0 rounded-full px-2.5 py-1.5 text-[11px] font-medium transition-all duration-200 sm:px-3.5 sm:text-[13px]',
                 isSelected
                   ? 'bg-ink text-cream shadow-[0_2px_10px_rgba(28,26,23,0.16)]'
                   : 'text-ink-muted hover:bg-cream/80 hover:text-ink'
