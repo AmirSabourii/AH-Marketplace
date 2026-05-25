@@ -17,17 +17,18 @@ import {
   Home,
 } from 'lucide-react';
 import {
-  SCENES,
   type Product,
   getProductDisplayImage,
   getProductVariant,
   findSceneForProduct,
 } from '../data/scenes';
+import type { CatalogItem } from '../lib/medusa/products';
+import { useFilteredCatalog } from '../hooks/useCatalogProducts';
 import type { CategoryId } from '../data/categories';
 import CategoryImagePicker from './CategoryImagePicker';
 import { buildShareUrl, sharePageLink } from '../lib/share';
-import { generateRoomVisualization } from '../lib/gemini/visualizer';
-import { analyzeRoomScene } from '../lib/gemini/roomAnalysis';
+import { fileToDataUri } from '../lib/medusa/fileToDataUri';
+import { streamRoomAnalyze, streamRoomStage } from '../lib/medusa/roomVisualizerSse';
 import {
   hashRoomFile,
   loadCachedRoomAnalysis,
@@ -60,6 +61,7 @@ const CATALOG_ASPECT_RATIOS = [
 ];
 
 interface TryInMyRoomViewProps {
+  catalog: CatalogItem[];
   products: Product[];
   activeProductId: string | null;
   colorSelections: Record<string, string>;
@@ -93,6 +95,7 @@ interface TryInMyRoomViewProps {
 }
 
 export default function TryInMyRoomView({
+  catalog,
   products,
   activeProductId,
   colorSelections,
@@ -123,6 +126,8 @@ export default function TryInMyRoomView({
   const [roomAnalysis, setRoomAnalysis] = useState<RoomSceneAnalysis | null>(null);
   const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>('idle');
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [analysisProgress, setAnalysisProgress] = useState<string | null>(null);
+  const [stageProgress, setStageProgress] = useState<string | null>(null);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<MobileTab>('products');
 
@@ -144,22 +149,15 @@ export default function TryInMyRoomView({
   const hasProducts = products.length > 0;
   const stagedIds = useMemo(() => new Set(products.map((p) => p.id)), [products]);
 
-  const catalogProducts = useMemo(() => {
-    const seen = new Set<string>();
-    const out: { product: Product; sceneImage: string }[] = [];
-    const scenes =
-      selectedCategory === 'all'
-        ? SCENES
-        : SCENES.filter((s) => s.categoryId === selectedCategory);
-    for (const scene of scenes) {
-      for (const product of scene.products) {
-        if (seen.has(product.id)) continue;
-        seen.add(product.id);
-        out.push({ product, sceneImage: scene.image });
-      }
-    }
-    return out;
-  }, [selectedCategory]);
+  const filteredCatalog = useFilteredCatalog(catalog, selectedCategory);
+  const catalogProducts = useMemo(
+    () =>
+      filteredCatalog.map((item) => ({
+        product: item.product,
+        sceneImage: item.displayImage,
+      })),
+    [filteredCatalog]
+  );
 
   const handleCatalogProductTap = useCallback(
     (product: Product) => {
@@ -186,6 +184,7 @@ export default function TryInMyRoomView({
 
     setAnalysisStatus('loading');
     setAnalysisError(null);
+    setAnalysisProgress('Reading room photo…');
     setRoomAnalysis(null);
     setActiveElementId(null);
 
@@ -197,12 +196,16 @@ export default function TryInMyRoomView({
       if (cached && !controller.signal.aborted) {
         setRoomAnalysis(cached);
         setAnalysisStatus('ready');
+        setAnalysisProgress(null);
         return;
       }
 
-      const analysis = await analyzeRoomScene({
-        roomFile: file,
+      const roomDataUri = await fileToDataUri(file);
+      const analysis = await streamRoomAnalyze(roomDataUri, {
         signal: controller.signal,
+        onProgress: (p) => {
+          if (p.message) setAnalysisProgress(p.message);
+        },
       });
 
       if (controller.signal.aborted) return;
@@ -210,12 +213,14 @@ export default function TryInMyRoomView({
       await saveCachedRoomAnalysis(hash, analysis);
       setRoomAnalysis(analysis);
       setAnalysisStatus('ready');
+      setAnalysisProgress(null);
     } catch (err) {
       if (controller.signal.aborted) return;
       const message =
         err instanceof Error ? err.message : 'Room scan failed. Please try again.';
       setAnalysisError(message);
       setAnalysisStatus('error');
+      setAnalysisProgress(null);
     }
   }, []);
 
@@ -258,13 +263,13 @@ export default function TryInMyRoomView({
     (element: DetectedRoomElement) => {
       setActiveElementId(element.id);
       const stagedIds = new Set(products.map((p) => p.id));
-      const suggested = pickBestProductForElement(element, stagedIds);
+      const suggested = pickBestProductForElement(element, stagedIds, catalog);
       onElementPersonalize?.(element, suggested);
       if (suggested) {
         onActiveProductChange(suggested.id);
       }
     },
-    [products, onElementPersonalize, onActiveProductChange]
+    [products, catalog, onElementPersonalize, onActiveProductChange]
   );
 
   useEffect(() => {
@@ -303,29 +308,32 @@ export default function TryInMyRoomView({
     abortRef.current = controller;
 
     setError(null);
+    setStageProgress('Preparing images…');
     setStep('generating');
 
     try {
-      const result = await generateRoomVisualization({
-        roomFile,
-        products: products.map((product) => {
-          const variant = getProductVariant(product, colorSelections[product.id]);
-          return {
-            name: product.name,
-            description: product.description,
-            imageUrl: getProductDisplayImage(product, colorSelections),
-            variantName: variant?.name,
-          };
-        }),
-        signal: controller.signal,
-      });
+      const roomDataUri = await fileToDataUri(roomFile);
+      const staged = await streamRoomStage(
+        {
+          roomDataUri,
+          productIds: products.map((product) => product.id),
+        },
+        {
+          signal: controller.signal,
+          onProgress: (p) => {
+            if (p.message) setStageProgress(p.message);
+          },
+        }
+      );
 
       if (controller.signal.aborted) return;
-      setGeneratedImage(result);
+      setGeneratedImage(staged.imageUrl);
+      setStageProgress(null);
       setStep('result');
       setActiveElementId(null);
     } catch (err) {
       if (controller.signal.aborted) return;
+      setStageProgress(null);
       const message =
         err instanceof Error ? err.message : 'Visualization failed. Please try again.';
       setError(message);
@@ -522,7 +530,7 @@ export default function TryInMyRoomView({
               <VisualizerLoading3D
                 overlay
                 label="Creating your staged room"
-                sublabel="Gemini is composing your space…"
+                sublabel={stageProgress ?? 'Generating staged room…'}
               />
             </div>
           )}
@@ -540,7 +548,9 @@ export default function TryInMyRoomView({
                     className="glass-dark pointer-events-none flex items-center gap-2 rounded-full px-4 py-2"
                   >
                     <Scan className="h-3.5 w-3.5 animate-pulse text-bronze" strokeWidth={1.75} />
-                    <span className="text-xs font-medium text-cream/85">Finding items…</span>
+                    <span className="text-xs font-medium text-cream/85">
+                      {analysisProgress ?? 'Finding items…'}
+                    </span>
                   </motion.div>
                 )}
                 {showHotspots && (
@@ -1218,7 +1228,7 @@ export default function TryInMyRoomView({
                 <VisualizerLoading3D
                   overlay
                   label="Creating your staged room"
-                  sublabel="Gemini 3.1 Flash Image is composing your space…"
+                  sublabel={stageProgress ?? 'Generating staged room…'}
                 />
               </motion.div>
             )}

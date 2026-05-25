@@ -1,12 +1,18 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { Home, Sparkles } from 'lucide-react';
-import { SCENES, type Product } from '../data/scenes';
+import type { Product } from '../data/scenes';
 import type { CategoryId } from '../data/categories';
+import type { CatalogItem } from '../lib/medusa/products';
+import { useFilteredCatalog } from '../hooks/useCatalogProducts';
 import CategoryImagePicker from './CategoryImagePicker';
 import ShoppingPipeline from './ShoppingPipeline';
 import { cn } from '../lib/cn';
 
 interface ProductMasonryGridProps {
+  catalog: CatalogItem[];
+  catalogLoading?: boolean;
+  catalogError?: string | null;
+  onRetryCatalog?: () => void;
   selectedCategory: CategoryId;
   onProductClick: (product: Product) => void;
   onTryInRoom?: (product: Product) => void;
@@ -18,6 +24,10 @@ interface ProductMasonryGridProps {
 }
 
 export default function ProductMasonryGrid({
+  catalog,
+  catalogLoading = false,
+  catalogError = null,
+  onRetryCatalog,
   selectedCategory,
   onProductClick,
   onTryInRoom,
@@ -39,9 +49,7 @@ export default function ProductMasonryGrid({
     'aspect-[9/16]',
   ];
 
-  const filteredProducts = SCENES.filter(
-    (scene) => selectedCategory === 'all' || scene.categoryId === selectedCategory
-  ).flatMap((scene) => scene.products.map((product) => ({ product, scene })));
+  const filteredItems = useFilteredCatalog(catalog, selectedCategory);
 
   return (
     <section
@@ -104,6 +112,25 @@ export default function ProductMasonryGrid({
         </motion.div>
       )}
 
+      {catalogLoading && (
+        <p className="py-12 text-center text-sm text-ink-muted">Loading products…</p>
+      )}
+
+      {catalogError && !catalogLoading && (
+        <div className="rounded-2xl border border-ink/10 bg-parchment/40 px-6 py-10 text-center">
+          <p className="text-sm text-ink-muted">{catalogError}</p>
+          {onRetryCatalog && (
+            <button
+              type="button"
+              onClick={onRetryCatalog}
+              className="mt-4 rounded-full border border-ink/15 px-4 py-2 text-sm font-medium text-ink hover:border-ink/25"
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      )}
+
       <motion.div
         layout
         className={cn(
@@ -112,7 +139,9 @@ export default function ProductMasonryGrid({
         )}
       >
         <AnimatePresence mode="popLayout">
-          {filteredProducts.map(({ product, scene }, index) => {
+          {!catalogLoading &&
+            !catalogError &&
+            filteredItems.map(({ product, displayImage }, index) => {
             const heightClass = ASPECT_RATIOS[index % ASPECT_RATIOS.length];
 
             return (
@@ -135,7 +164,7 @@ export default function ProductMasonryGrid({
                   )}
                 >
                   <img
-                    src={scene.image}
+                    src={displayImage}
                     alt={product.name}
                     className="absolute inset-0 h-full w-full object-cover transition-transform duration-700 group-hover:scale-105"
                     loading="lazy"

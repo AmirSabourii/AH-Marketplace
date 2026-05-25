@@ -13,7 +13,9 @@ import type { AIContext } from './types/ai';
 import UploadFlow from './components/UploadFlow';
 import { cn } from './lib/cn';
 import { type CategoryId } from './data/categories';
-import { findProductInScene, type Product } from './data/scenes';
+import { type Product } from './data/scenes';
+import { useCatalogProducts } from './hooks/useCatalogProducts';
+import { findProductInCatalog } from './lib/medusa/products';
 import type { DetectedRoomElement } from './lib/roomAnalysis/types';
 import { parseDeepLink } from './lib/share';
 import { hasSavedRoom as checkHasSavedRoom } from './lib/savedRoom';
@@ -35,6 +37,8 @@ import {
 function App() {
   const firstCategory = 'all';
   const deepLink = parseDeepLink();
+  const { items: catalog, loading: catalogLoading, error: catalogError, refresh: refreshCatalog } =
+    useCatalogProducts();
 
   const [activeProduct, setActiveProduct] = useState<Product | null>(null);
   const [colorSelections, setColorSelections] = useState<Record<string, string>>({});
@@ -280,17 +284,21 @@ function App() {
   );
 
   useEffect(() => {
-    if (deepLinkHandled.current) return;
-    deepLinkHandled.current = true;
+    if (deepLinkHandled.current || catalogLoading) return;
 
     const { categoryId, productId, openRoom } = parseDeepLink();
-    if (!categoryId && !openRoom) return;
+    if (!categoryId && !openRoom && !productId) {
+      deepLinkHandled.current = true;
+      return;
+    }
+
+    deepLinkHandled.current = true;
 
     window.setTimeout(() => {
       if (productId) {
-        const found = findProductInScene(productId);
+        const found = findProductInCatalog(catalog, productId);
         if (found) {
-          setSelectedCategory(found.scene.categoryId);
+          setSelectedCategory(found.categoryId);
           if (openRoom) {
             setStagedProducts([found.product]);
             setActiveStagedProductId(found.product.id);
@@ -305,7 +313,7 @@ function App() {
         scrollToGrid();
       }
     }, 150);
-  }, [scrollToGrid]);
+  }, [scrollToGrid, catalog, catalogLoading]);
 
   const handleAddToCart = useCallback(
     (product?: Product | null) => {
@@ -434,6 +442,10 @@ function App() {
           </div>
 
           <ProductMasonryGrid
+            catalog={catalog}
+            catalogLoading={catalogLoading}
+            catalogError={catalogError}
+            onRetryCatalog={refreshCatalog}
             selectedCategory={selectedCategory}
             onProductClick={openProduct}
             onTryInRoom={handleTryInRoom}
@@ -464,6 +476,7 @@ function App() {
               />
               <TryInMyRoomView
                 variant="desktop"
+                catalog={catalog}
                 products={stagedProducts}
                 activeProductId={activeStagedProductId}
                 colorSelections={colorSelections}
@@ -534,6 +547,7 @@ function App() {
         <div className="fixed inset-0 z-50 flex h-[100dvh] w-full flex-col overflow-hidden bg-ink lg:hidden">
           <TryInMyRoomView
             variant="mobile"
+            catalog={catalog}
             products={stagedProducts}
               activeProductId={activeStagedProductId}
               colorSelections={colorSelections}

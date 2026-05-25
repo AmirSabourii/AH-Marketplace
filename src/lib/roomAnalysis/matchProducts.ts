@@ -1,18 +1,23 @@
 import type { CategoryId } from '../../data/categories';
-import { getAllProductsForCategory, type Product } from '../../data/scenes';
+import type { CatalogItem } from '../medusa/products';
+import type { Product } from '../../data/scenes';
 import type { DetectedRoomElement } from './types';
 
 /** Pick catalog products that fit a detected room element (for staging on click) */
-export function getProductsForElement(element: DetectedRoomElement): Product[] {
+export function getProductsForElement(
+  element: DetectedRoomElement,
+  catalog: CatalogItem[]
+): Product[] {
   const categories = element.suggestedCategoryIds.filter((c) => c !== 'all');
   const seen = new Set<string>();
   const out: Product[] = [];
 
   for (const categoryId of categories) {
-    for (const product of getAllProductsForCategory(categoryId)) {
-      if (!seen.has(product.id)) {
-        seen.add(product.id);
-        out.push(product);
+    for (const item of catalog) {
+      if (item.categoryId !== categoryId) continue;
+      if (!seen.has(item.product.id)) {
+        seen.add(item.product.id);
+        out.push(item.product);
       }
     }
   }
@@ -22,9 +27,10 @@ export function getProductsForElement(element: DetectedRoomElement): Product[] {
 
 export function pickBestProductForElement(
   element: DetectedRoomElement,
-  stagedProductIds: Set<string>
+  stagedProductIds: Set<string>,
+  catalog: CatalogItem[]
 ): Product | null {
-  const candidates = getProductsForElement(element);
+  const candidates = getProductsForElement(element, catalog);
   if (candidates.length === 0) return null;
 
   const unstaged = candidates.find((p) => !stagedProductIds.has(p.id));
