@@ -6,6 +6,8 @@ import { fadeUp, staggerContainer } from '../lib/motion';
 import { cn } from '../lib/cn';
 import type { CategoryId } from '../data/categories';
 
+const HERO_BG = '/hero-background.png';
+
 interface HeroProps {
   selectedCategory: CategoryId;
   onCategorySelect: (id: CategoryId) => void;
@@ -30,8 +32,16 @@ export default function Hero({
           chatActive && 'blur-2xl opacity-60'
         )}
       >
-        <div className="absolute left-[50%] top-[20%] h-[32rem] w-[32rem] -translate-x-1/2 rounded-full bg-bronze-soft/40 blur-[120px]" />
-        <div className="absolute left-[20%] bottom-[10%] h-[24rem] w-[24rem] rounded-full bg-parchment/80 blur-[100px]" />
+        <img
+          src={HERO_BG}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover object-[center_35%] saturate-[1.08] contrast-[1.04]"
+          fetchPriority="high"
+          decoding="async"
+        />
+        {/* Light edge fades only — keeps photo visible */}
+        <div className="absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-cream/30 to-transparent" />
+        <div className="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-cream/45 to-transparent" />
       </div>
 
       <motion.div
@@ -43,13 +53,6 @@ export default function Hero({
           chatActive && 'pointer-events-none blur-md opacity-40 scale-[0.98]'
         )}
       >
-        <motion.p
-          variants={fadeUp}
-          className="mb-4 text-xs font-medium uppercase tracking-[0.2em] text-ink-muted sm:text-sm"
-        >
-          Welcome to
-        </motion.p>
-
         <motion.div variants={fadeUp} className="relative mb-8 w-full max-w-2xl sm:mb-10">
           <div className="relative z-0 flex justify-center">
             <div className="origin-top scale-[1.15] transform sm:scale-[1.35] md:scale-[1.5]">

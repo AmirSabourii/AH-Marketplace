@@ -11,6 +11,8 @@ export interface AIContext {
   categoryId?: CategoryId;
   stagedProducts?: Product[];
   visualizerStep?: AIVisualizerStep;
+  /** Latest staged room image (AI composite) or room preview for the visualizer */
+  roomImageUrl?: string | null;
 }
 
 export function buildAIContextLabel(ctx: AIContext): string {

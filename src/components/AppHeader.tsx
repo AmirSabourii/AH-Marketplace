@@ -1,11 +1,13 @@
 import { motion, AnimatePresence } from 'framer-motion';
-import { Home, ShoppingBag, Sparkles, User } from 'lucide-react';
+import { Home, User } from 'lucide-react';
+import CartIconButton from './CartIconButton';
 import CategoryImagePicker from './CategoryImagePicker';
 import { type CategoryId } from '../data/categories';
 import { cn } from '../lib/cn';
 
 interface AppHeaderProps {
   cartCount?: number;
+  cartPulseKey?: number;
   onCartClick?: () => void;
   onUserClick?: () => void;
   onMyRoomClick?: () => void;
@@ -20,6 +22,7 @@ interface AppHeaderProps {
 
 export default function AppHeader({
   cartCount = 0,
+  cartPulseKey = 0,
   onCartClick,
   onUserClick,
   onMyRoomClick,
@@ -28,8 +31,6 @@ export default function AppHeader({
   showCategories = false,
   onLogoClick,
   tryInRoomActive = false,
-  hasSavedRoom = false,
-  stagedCount = 0,
 }: AppHeaderProps) {
   if (tryInRoomActive) {
     return null;
@@ -92,9 +93,6 @@ export default function AppHeader({
         >
           <Home className="h-[16px] w-[16px] sm:h-3.5 sm:w-3.5" strokeWidth={1.75} />
           <span className="hidden text-xs font-semibold sm:inline">Room visualizer</span>
-          {(hasSavedRoom || stagedCount > 0) && (
-            <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-cream ring-2 ring-bronze" />
-          )}
         </button>
 
         <motion.button
@@ -109,30 +107,16 @@ export default function AppHeader({
           <User className="h-[16px] w-[16px]" strokeWidth={1.75} />
         </motion.button>
 
-        <button
-          type="button"
+        <CartIconButton
+          cartCount={cartCount}
+          pulseKey={cartPulseKey}
           onClick={onCartClick}
           className={cn(
-            'relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full',
+            'flex h-9 w-9 shrink-0 items-center justify-center rounded-full',
             'bg-ink text-cream transition-all duration-200 hover:bg-ink/86 active:scale-95'
           )}
-          aria-label="Shopping cart"
-        >
-          <ShoppingBag className="h-[16px] w-[16px]" strokeWidth={1.75} />
-          <AnimatePresence>
-            {cartCount > 0 && (
-              <motion.span
-                initial={{ scale: 0, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0, opacity: 0 }}
-                transition={{ type: 'spring', stiffness: 500, damping: 24 }}
-                className="absolute -right-1 -top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-bronze px-1 text-[10px] font-semibold text-cream shadow-sm"
-              >
-                {cartCount}
-              </motion.span>
-            )}
-          </AnimatePresence>
-        </button>
+          iconClassName="h-[16px] w-[16px]"
+        />
       </motion.div>
     </header>
   );

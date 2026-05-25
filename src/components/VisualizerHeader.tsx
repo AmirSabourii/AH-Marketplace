@@ -1,13 +1,13 @@
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import {
   ArrowLeft,
   Check,
   ImagePlus,
   Share2,
-  ShoppingBag,
   SlidersHorizontal,
 } from 'lucide-react';
 import AskAiToolbarButton from './AskAiToolbarButton';
+import CartIconButton from './CartIconButton';
 import { cn } from '../lib/cn';
 import type { VisualizerChromeState } from './visualizerChrome';
 
@@ -17,6 +17,7 @@ function HeaderDivider() {
 
 interface VisualizerHeaderProps {
   cartCount?: number;
+  cartPulseKey?: number;
   stagedCount?: number;
   onBackToShop?: () => void;
   onCartClick?: () => void;
@@ -27,6 +28,7 @@ interface VisualizerHeaderProps {
 /** Centered within the visualizer panel — not the full viewport */
 export default function VisualizerHeader({
   cartCount = 0,
+  cartPulseKey = 0,
   stagedCount = 0,
   onBackToShop,
   onCartClick,
@@ -142,26 +144,13 @@ export default function VisualizerHeader({
           </>
         )}
 
-        <button
-          type="button"
+        <CartIconButton
+          cartCount={cartCount}
+          pulseKey={cartPulseKey}
           onClick={onCartClick}
-          className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-cream/12 text-cream transition-all duration-200 hover:bg-cream/20 active:scale-95"
-          aria-label="Shopping cart"
-        >
-          <ShoppingBag className="h-4 w-4" strokeWidth={1.75} />
-          <AnimatePresence>
-            {cartCount > 0 && (
-              <motion.span
-                initial={{ scale: 0, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0, opacity: 0 }}
-                className="absolute -right-1 -top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-bronze px-1 text-[10px] font-semibold text-cream"
-              >
-                {cartCount}
-              </motion.span>
-            )}
-          </AnimatePresence>
-        </button>
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-cream/12 text-cream transition-all duration-200 hover:bg-cream/20 active:scale-95"
+          iconClassName="h-4 w-4"
+        />
       </motion.div>
     </header>
   );

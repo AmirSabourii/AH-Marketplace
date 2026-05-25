@@ -15,7 +15,7 @@ interface MobileNavBarProps {
 export default function MobileNavBar({
   cartCount,
   tryInRoomActive,
-  hasSavedRoom,
+  hasSavedRoom: _hasSavedRoom,
   stagedCount,
   onShopClick,
   onMyRoomClick,
@@ -58,12 +58,7 @@ export default function MobileNavBar({
           aria-label="Open room visualizer"
           aria-current={tryInRoomActive ? 'page' : undefined}
         >
-          <span className="relative flex h-[18px] w-[18px] items-center justify-center">
-            <Home className="h-[18px] w-[18px]" strokeWidth={1.75} />
-            {(hasSavedRoom || stagedCount > 0) && (
-              <span className="absolute -right-1.5 -top-1.5 flex h-2 w-2 rounded-full bg-cream ring-2 ring-bronze" />
-            )}
-          </span>
+          <Home className="h-[18px] w-[18px]" strokeWidth={1.75} />
           <span className="flex items-center gap-1">
             Visualizer
             {!tryInRoomActive && <Sparkles className="h-2.5 w-2.5 opacity-80" strokeWidth={2} />}

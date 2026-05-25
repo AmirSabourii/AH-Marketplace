@@ -1,5 +1,6 @@
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, ShoppingBag, Home, Sparkles, MessageCircle, ChevronRight } from 'lucide-react';
+import { X, Home, Sparkles, MessageCircle, ChevronRight } from 'lucide-react';
+import AddToCartButton from './AddToCartButton';
 import { cn } from '../lib/cn';
 import {
   getProductDisplayImage,
@@ -231,14 +232,13 @@ function ProductSidebarDetail({
               Room visualizer
               <Sparkles className="h-3.5 w-3.5 opacity-75" strokeWidth={2} />
             </button>
-            <button
-              type="button"
-              onClick={onAddToCart}
-              className="flex w-full items-center justify-center gap-2 rounded-full border border-ink/10 py-3 text-sm font-medium text-ink-muted transition-all hover:border-ink/18 hover:bg-parchment/80 hover:text-ink active:scale-[0.99]"
-            >
-              <ShoppingBag className="h-4 w-4" strokeWidth={1.75} />
-              Add to cart
-            </button>
+            {onAddToCart && (
+              <AddToCartButton
+                variant="full"
+                onClick={onAddToCart}
+                className="border border-ink/10 bg-cream text-ink hover:border-ink/18"
+              />
+            )}
           </div>
         </footer>
       </div>
@@ -339,14 +339,13 @@ function ProductSheetDetail({
           <Home className="h-4 w-4" strokeWidth={1.75} />
           Room visualizer
         </button>
-        <button
-          type="button"
-          onClick={onAddToCart}
-          className="flex w-full items-center justify-center gap-2 rounded-full border border-ink/12 py-3 text-sm font-medium text-ink-muted active:scale-[0.99]"
-        >
-          <ShoppingBag className="h-4 w-4" strokeWidth={1.75} />
-          Add to cart
-        </button>
+        {onAddToCart && (
+          <AddToCartButton
+            variant="full"
+            onClick={onAddToCart}
+            className="border border-ink/12 bg-cream text-ink"
+          />
+        )}
       </footer>
     </>
   );

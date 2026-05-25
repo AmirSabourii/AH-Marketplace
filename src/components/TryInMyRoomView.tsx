@@ -11,9 +11,7 @@ import {
   SlidersHorizontal,
   Share2,
   Check,
-  ShoppingBag,
   Sparkles,
-  MessageCircle,
   Home,
 } from 'lucide-react';
 import {
@@ -43,8 +41,11 @@ import { cn } from '../lib/cn';
 import VisualizerLoading3D from './VisualizerLoading3D';
 import CompareSlider from './CompareSlider';
 import VisualizerProductBar from './VisualizerProductBar';
+import AddToCartButton from './AddToCartButton';
+import CartIconButton from './CartIconButton';
 import RoomSceneFrame from './RoomSceneFrame';
 import type { VisualizerChromeState } from './visualizerChrome';
+import type { AIVisualizerStep } from '../types/ai';
 
 type Step = 'pick' | 'ready' | 'generating' | 'result';
 type AnalysisStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -63,18 +64,25 @@ const CATALOG_ASPECT_RATIOS = [
 
 interface TryInMyRoomViewProps {
   catalog: CatalogItem[];
+  /** Catalog selection — not yet in the room image */
   products: Product[];
+  /** Products composited in the staged room image */
+  placedProducts: Product[];
   activeProductId: string | null;
   colorSelections: Record<string, string>;
   onColorSelect: (productId: string, variantId: string) => void;
   onActiveProductChange: (productId: string) => void;
   onRemoveProduct: (productId: string) => void;
+  onRemovePlacedProduct: (productId: string) => void;
+  onPlacedProductsChange: (products: Product[]) => void;
   onClose: () => void;
   onAddToCart?: (product: Product) => void;
   onRoomSaved?: () => void;
   onChromeChange?: (chrome: VisualizerChromeState) => void;
   /** Direct ref so the top header can open the file picker synchronously on click */
   registerRoomPhotoPicker?: (picker: (() => void) | null) => void;
+  /** Sidebar / parent — remove from room image + silent regen */
+  registerRemovePlacedFromRoom?: (handler: ((productId: string) => void) | null) => void;
   /** User tapped a detected room element — parent can filter shop + stage product */
   onElementPersonalize?: (
     element: DetectedRoomElement,
@@ -86,6 +94,7 @@ interface TryInMyRoomViewProps {
   onOpenAI?: (product?: Product) => void;
   /** Mobile-only: current cart item count */
   cartCount?: number;
+  cartPulseKey?: number;
   /** Mobile-only: shop category filter for catalog in Products tab */
   selectedCategory?: CategoryId;
   onCategorySelect?: (id: CategoryId) => void;
@@ -93,29 +102,40 @@ interface TryInMyRoomViewProps {
   onStageProduct?: (product: Product) => void;
   /** Layout mode — set explicitly from App (do not rely on viewport detection) */
   variant?: 'mobile' | 'desktop';
+  /** Latest room / staged image for AI assistant attachment */
+  onVisualizerContextChange?: (ctx: {
+    step: AIVisualizerStep;
+    roomImageUrl: string | null;
+  }) => void;
 }
 
 export default function TryInMyRoomView({
   catalog,
   products,
+  placedProducts,
   activeProductId,
   colorSelections,
   onColorSelect,
   onActiveProductChange,
   onRemoveProduct,
+  onRemovePlacedProduct,
+  onPlacedProductsChange,
   onClose,
   onAddToCart,
   onRoomSaved,
   onChromeChange,
   registerRoomPhotoPicker,
+  registerRemovePlacedFromRoom,
   onElementPersonalize,
   onCartClick,
   onOpenAI,
   cartCount = 0,
+  cartPulseKey = 0,
   selectedCategory = 'all',
   onCategorySelect,
   onStageProduct,
   variant = 'desktop',
+  onVisualizerContextChange,
 }: TryInMyRoomViewProps) {
   const [step, setStep] = useState<Step>('pick');
   const [preview, setPreview] = useState<string | null>(null);
@@ -131,24 +151,49 @@ export default function TryInMyRoomView({
   const [stageProgress, setStageProgress] = useState<string | null>(null);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<MobileTab>('products');
+  const [isSilentUpdating, setIsSilentUpdating] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<string | null>(null);
   const roomFileRef = useRef<File | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const silentAbortRef = useRef<AbortController | null>(null);
+  const silentRequestRef = useRef(0);
+  const placedRef = useRef(placedProducts);
+  placedRef.current = placedProducts;
   const analysisAbortRef = useRef<AbortController | null>(null);
   const roomHashRef = useRef<string | null>(null);
 
   const activeProduct =
-    products.find((p) => p.id === activeProductId) ?? products[0] ?? null;
+    placedProducts.find((p) => p.id === activeProductId) ??
+    products.find((p) => p.id === activeProductId) ??
+    placedProducts[0] ??
+    products[0] ??
+    null;
   const activeVariant = activeProduct
     ? getProductVariant(activeProduct, colorSelections[activeProduct.id])
     : undefined;
   const activeProductImage = activeProduct
     ? getProductDisplayImage(activeProduct, colorSelections)
     : '';
-  const hasProducts = products.length > 0;
+  const hasSelection = products.length > 0;
+  const hasPlaced = placedProducts.length > 0;
   const stagedIds = useMemo(() => new Set(products.map((p) => p.id)), [products]);
+  const placedIds = useMemo(
+    () => new Set(placedProducts.map((p) => p.id)),
+    [placedProducts]
+  );
+
+  const productsForPreview = useMemo(() => {
+    const seen = new Set<string>();
+    const out: Product[] = [];
+    for (const p of [...placedProducts, ...products]) {
+      if (seen.has(p.id)) continue;
+      seen.add(p.id);
+      out.push(p);
+    }
+    return out;
+  }, [placedProducts, products]);
 
   const filteredCatalog = useFilteredCatalog(catalog, selectedCategory);
   const catalogProducts = useMemo(
@@ -158,21 +203,6 @@ export default function TryInMyRoomView({
         sceneImage: item.displayImage,
       })),
     [filteredCatalog]
-  );
-
-  const handleCatalogProductTap = useCallback(
-    (product: Product) => {
-      if (stagedIds.has(product.id)) {
-        if (activeProduct?.id === product.id) {
-          onRemoveProduct(product.id);
-        } else {
-          onActiveProductChange(product.id);
-        }
-      } else {
-        onStageProduct?.(product);
-      }
-    },
-    [stagedIds, activeProduct, onActiveProductChange, onRemoveProduct, onStageProduct]
   );
 
   const revokePreview = () => {
@@ -280,6 +310,7 @@ export default function TryInMyRoomView({
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      silentAbortRef.current?.abort();
       analysisAbortRef.current?.abort();
       revokePreview();
     };
@@ -304,11 +335,79 @@ export default function TryInMyRoomView({
     };
   }, [roomLoaded, applyRoomFile]);
 
+  const runSilentVisualization = useCallback(
+    async (items: Product[], expectedIds: string[]) => {
+      const roomFile = roomFileRef.current;
+      if (!roomFile || items.length === 0) return;
+
+      const requestId = ++silentRequestRef.current;
+      silentAbortRef.current?.abort();
+      const controller = new AbortController();
+      silentAbortRef.current = controller;
+
+      setIsSilentUpdating(true);
+      setError(null);
+
+      try {
+        const roomDataUri = await fileToDataUri(roomFile);
+        const staged = await streamRoomStage(
+          {
+            roomDataUri,
+            productIds: items.map((product) => product.id),
+          },
+          { signal: controller.signal }
+        );
+
+        if (controller.signal.aborted || requestId !== silentRequestRef.current) return;
+
+        const currentKey = [...placedRef.current.map((p) => p.id)].sort().join(',');
+        const expectedKey = [...expectedIds].sort().join(',');
+        if (currentKey !== expectedKey) return;
+
+        setGeneratedImage(staged.imageUrl);
+        setStep('result');
+        setActiveElementId(null);
+      } catch (err) {
+        if (controller.signal.aborted || requestId !== silentRequestRef.current) return;
+        const message =
+          err instanceof Error ? err.message : 'Could not update your room.';
+        setError(message);
+      } finally {
+        if (requestId === silentRequestRef.current) {
+          setIsSilentUpdating(false);
+        }
+      }
+    },
+    []
+  );
+
+  const handleRemovePlaced = useCallback(
+    (productId: string) => {
+      const nextPlaced = placedProducts.filter((p) => p.id !== productId);
+      const nextIds = nextPlaced.map((p) => p.id);
+      onRemovePlacedProduct(productId);
+
+      if (step === 'result' && generatedImage) {
+        if (nextPlaced.length === 0) {
+          silentRequestRef.current += 1;
+          silentAbortRef.current?.abort();
+          setIsSilentUpdating(false);
+          setGeneratedImage(null);
+          setStep('ready');
+        } else {
+          void runSilentVisualization(nextPlaced, nextIds);
+        }
+      }
+    },
+    [placedProducts, onRemovePlacedProduct, step, generatedImage, runSilentVisualization]
+  );
+
   const runVisualization = useCallback(async () => {
     const roomFile = roomFileRef.current;
-    if (!roomFile || products.length === 0) return;
+    if (!roomFile || productsForPreview.length === 0) return;
 
     abortRef.current?.abort();
+    silentAbortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
 
@@ -321,7 +420,7 @@ export default function TryInMyRoomView({
       const staged = await streamRoomStage(
         {
           roomDataUri,
-          productIds: products.map((product) => product.id),
+          productIds: productsForPreview.map((product) => product.id),
         },
         {
           signal: controller.signal,
@@ -335,6 +434,7 @@ export default function TryInMyRoomView({
       setGeneratedImage(staged.imageUrl);
       setStageProgress(null);
       setStep('result');
+      onPlacedProductsChange(productsForPreview);
       setActiveElementId(null);
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -344,7 +444,40 @@ export default function TryInMyRoomView({
       setError(message);
       setStep('ready');
     }
-  }, [products, colorSelections]);
+  }, [productsForPreview, onPlacedProductsChange]);
+
+  const handleCatalogProductTap = useCallback(
+    (product: Product) => {
+      const isPlaced = placedIds.has(product.id);
+      const isStaged = stagedIds.has(product.id);
+      const isSelected = isPlaced || isStaged;
+
+      if (isSelected && activeProductId === product.id) {
+        if (isPlaced) {
+          handleRemovePlaced(product.id);
+        } else {
+          onRemoveProduct(product.id);
+        }
+        return;
+      }
+
+      if (isSelected) {
+        onActiveProductChange(product.id);
+        return;
+      }
+
+      onStageProduct?.(product);
+    },
+    [
+      placedIds,
+      stagedIds,
+      activeProductId,
+      onActiveProductChange,
+      onRemoveProduct,
+      onStageProduct,
+      handleRemovePlaced,
+    ]
+  );
 
   const handlePreview = () => {
     void runVisualization();
@@ -378,6 +511,17 @@ export default function TryInMyRoomView({
     registerRoomPhotoPicker?.(openRoomPhotoPicker);
     return () => registerRoomPhotoPicker?.(null);
   }, [openRoomPhotoPicker, registerRoomPhotoPicker]);
+
+  useEffect(() => {
+    registerRemovePlacedFromRoom?.(handleRemovePlaced);
+    return () => registerRemovePlacedFromRoom?.(null);
+  }, [handleRemovePlaced, registerRemovePlacedFromRoom]);
+
+  useEffect(() => {
+    const roomImageUrl =
+      step === 'result' && generatedImage ? generatedImage : null;
+    onVisualizerContextChange?.({ step, roomImageUrl });
+  }, [step, generatedImage, onVisualizerContextChange]);
 
   useEffect(() => {
     onChromeChange?.({
@@ -415,7 +559,7 @@ export default function TryInMyRoomView({
     Boolean(preview && displayImage) &&
     (step === 'ready' || step === 'generating' || step === 'result');
 
-  const canPreview = step === 'ready' && hasProducts;
+  const canPreview = step === 'ready' && productsForPreview.length > 0;
   const showCompare = step === 'result' && Boolean(preview && generatedImage);
 
   // ─── SHARED: room image content ────────────────────────────────────────────
@@ -509,9 +653,11 @@ export default function TryInMyRoomView({
                 <div className="text-center">
                   <p className="text-lg font-medium text-cream">Upload your room</p>
                   <p className="mt-1 text-sm text-cream/55">JPG · PNG · HEIC</p>
-                  {hasProducts && (
+                  {(hasSelection || hasPlaced) && (
                     <p className="mt-2 text-xs font-semibold text-bronze">
-                      {products.length} product{products.length > 1 ? 's' : ''} ready to stage
+                      {hasPlaced
+                        ? `${placedProducts.length} in your room`
+                        : `${products.length} product${products.length > 1 ? 's' : ''} ready to stage`}
                     </p>
                   )}
                 </div>
@@ -679,29 +825,17 @@ export default function TryInMyRoomView({
                 <AskAiToolbarButton onClick={() => onOpenAI()} variant="dark" />
               )}
 
-              <button
-                type="button"
+              <CartIconButton
+                cartCount={cartCount}
+                pulseKey={cartPulseKey}
                 onClick={onCartClick}
                 className={cn(
-                  'relative flex h-9 w-9 items-center justify-center rounded-full transition-all active:scale-95',
+                  'flex h-9 w-9 items-center justify-center rounded-full transition-all active:scale-95',
                   step !== 'pick' ? 'glass-dark text-cream' : 'glass text-ink'
                 )}
-                aria-label="Shopping cart"
-              >
-                <ShoppingBag className="h-4 w-4" strokeWidth={1.75} />
-                <AnimatePresence>
-                  {cartCount > 0 && (
-                    <motion.span
-                      initial={{ scale: 0 }}
-                      animate={{ scale: 1 }}
-                      exit={{ scale: 0 }}
-                      className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-bronze px-0.5 text-[9px] font-bold text-cream"
-                    >
-                      {cartCount}
-                    </motion.span>
-                  )}
-                </AnimatePresence>
-              </button>
+                iconClassName="h-4 w-4"
+                badgeClassName="text-[9px] min-w-4 h-4"
+              />
             </div>
           </div>
         </div>
@@ -763,11 +897,14 @@ export default function TryInMyRoomView({
 
                 <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain no-scrollbar px-4 py-3">
                   <p className="mb-3 text-[10px] font-medium uppercase tracking-[0.18em] text-ink-faint">
-                    Tap to stage · tap again to remove
+                    {hasPlaced
+                      ? 'In room · tap to add or remove from room'
+                      : 'Tap to stage · tap again to remove'}
                   </p>
                   <div className="columns-2 gap-2.5">
                     {catalogProducts.map(({ product, sceneImage }, index) => {
                       const isActive = activeProduct?.id === product.id;
+                      const isPlaced = placedIds.has(product.id);
                       const isStaged = stagedIds.has(product.id);
                       const heightClass =
                         CATALOG_ASPECT_RATIOS[index % CATALOG_ASPECT_RATIOS.length];
@@ -782,8 +919,10 @@ export default function TryInMyRoomView({
                             className={cn(
                               'relative w-full overflow-hidden rounded-2xl bg-parchment/60',
                               heightClass,
-                              isStaged && 'ring-2 ring-bronze',
-                              isActive && isStaged && 'ring-offset-2 ring-offset-cream'
+                              (isPlaced || isStaged) && 'ring-1 ring-ink/20',
+                              isActive &&
+                                (isPlaced || isStaged) &&
+                                'ring-ink/35 shadow-[0_0_0_1px_rgba(28,26,23,0.06)]'
                             )}
                           >
                             <img
@@ -796,12 +935,16 @@ export default function TryInMyRoomView({
                             <span
                               className={cn(
                                 'absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full shadow-sm backdrop-blur-sm',
-                                isStaged
-                                  ? 'bg-bronze text-cream'
-                                  : 'bg-cream/90 text-bronze'
+                                isPlaced
+                                  ? 'bg-ink text-cream'
+                                  : isStaged
+                                    ? 'bg-bronze text-cream'
+                                    : 'bg-cream/90 text-bronze'
                               )}
                             >
-                              {isStaged ? (
+                              {isPlaced ? (
+                                <Home className="h-3.5 w-3.5" strokeWidth={1.75} />
+                              ) : isStaged ? (
                                 <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
                               ) : (
                                 <Home className="h-3.5 w-3.5" strokeWidth={1.75} />
@@ -826,17 +969,17 @@ export default function TryInMyRoomView({
                   className="shrink-0 border-t border-ink/8 bg-cream/95 px-4 py-3 backdrop-blur-md"
                   style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
                 >
-                  {!hasProducts ? (
+                  {productsForPreview.length === 0 ? (
                     <p className="mb-2 text-center text-[11px] text-ink-muted">
                       Tap a product to stage it in your room
                     </p>
                   ) : (
                     <p className="mb-2 text-center text-[11px] text-ink-muted">
-                      {products.length > 1 ? (
+                      {productsForPreview.length > 1 ? (
                         <>
                           <span className="font-semibold text-ink">Preview all</span>
                           {' '}
-                          stages {products.length} pieces in your room
+                          stages {productsForPreview.length} pieces in your room
                         </>
                       ) : (
                         <>
@@ -876,19 +1019,16 @@ export default function TryInMyRoomView({
                       ) : (
                         <>
                           <Sparkles className="h-4 w-4" strokeWidth={2} />
-                          {products.length > 1 ? 'Preview all' : 'Preview room'}
+                          {productsForPreview.length > 1 ? 'Preview all' : 'Preview room'}
                         </>
                       )}
                     </button>
-                    {activeProduct && stagedIds.has(activeProduct.id) && (
-                      <button
-                        type="button"
+                    {activeProduct && (placedIds.has(activeProduct.id) || stagedIds.has(activeProduct.id)) && (
+                      <AddToCartButton
+                        variant="icon"
                         onClick={() => onAddToCart?.(activeProduct)}
-                        className="flex h-[50px] w-[50px] shrink-0 items-center justify-center rounded-full bg-ink text-cream transition-all active:scale-[0.99]"
-                        aria-label="Add to cart"
-                      >
-                        <ShoppingBag className="h-4 w-4" strokeWidth={1.75} />
-                      </button>
+                        className="h-[50px] w-[50px] shrink-0"
+                      />
                     )}
                   </div>
                 </footer>
@@ -1017,10 +1157,10 @@ export default function TryInMyRoomView({
                     )}
 
                     {/* Add to cart */}
-                    {stagedIds.has(activeProduct.id) && (
+                    {placedIds.has(activeProduct.id) && (
                       <button
                         type="button"
-                        onClick={() => onRemoveProduct(activeProduct.id)}
+                        onClick={() => handleRemovePlaced(activeProduct.id)}
                         className="flex w-full items-center justify-center gap-2 rounded-full border border-ink/12 py-2.5 text-xs font-medium text-ink-muted transition-all active:scale-[0.99]"
                       >
                         <X className="h-3.5 w-3.5" strokeWidth={2} />
@@ -1028,19 +1168,15 @@ export default function TryInMyRoomView({
                       </button>
                     )}
 
-                    <button
-                      type="button"
+                    <AddToCartButton
+                      variant="full"
                       onClick={() => onAddToCart?.(activeProduct)}
-                      className="flex w-full items-center justify-center gap-2 rounded-full bg-ink py-3.5 text-sm font-semibold text-cream transition-all active:scale-[0.99]"
-                    >
-                      <ShoppingBag className="h-4 w-4" strokeWidth={1.75} />
-                      Add to cart
-                    </button>
+                    />
                   </div>
                 )}
                 </div>
 
-                {activeProduct && stagedIds.has(activeProduct.id) && (
+                {activeProduct && (placedIds.has(activeProduct.id) || stagedIds.has(activeProduct.id)) && (
                   <footer
                     className="shrink-0 border-t border-ink/8 bg-cream/95 px-4 py-3 backdrop-blur-md"
                     style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
@@ -1066,7 +1202,7 @@ export default function TryInMyRoomView({
                       ) : (
                         <>
                           <Sparkles className="h-4 w-4" strokeWidth={2} />
-                          {products.length > 1 ? 'Preview all' : 'Preview room'}
+                          {productsForPreview.length > 1 ? 'Preview all' : 'Preview room'}
                         </>
                       )}
                     </button>
@@ -1206,9 +1342,11 @@ export default function TryInMyRoomView({
                 >
                   <p className="font-medium text-lg text-ink">Upload a photo of your room</p>
                   <p className="mt-2 text-ink-muted">JPG or PNG · we&apos;ll tag furniture for you</p>
-                  {hasProducts && (
+                  {(hasSelection || hasPlaced) && (
                     <p className="mt-3 text-xs font-medium text-bronze">
-                      {products.length} product{products.length > 1 ? 's' : ''} ready to stage
+                      {hasPlaced
+                        ? `${placedProducts.length} in your room`
+                        : `${products.length} product${products.length > 1 ? 's' : ''} ready to stage`}
                     </p>
                   )}
                 </motion.div>
@@ -1252,14 +1390,18 @@ export default function TryInMyRoomView({
       </motion.div>
 
       <VisualizerProductBar
-        products={products}
+        placedProducts={placedProducts}
+        productsForPreview={productsForPreview}
         activeProduct={activeProduct}
+        activeProductId={activeProductId}
         colorSelections={colorSelections}
         step={step}
         canPreview={canPreview}
+        isSilentUpdating={isSilentUpdating}
         onColorSelect={onColorSelect}
         onActiveProductChange={onActiveProductChange}
         onRemoveProduct={onRemoveProduct}
+        onRemovePlacedProduct={handleRemovePlaced}
         onPreview={handlePreview}
         onAddToCart={onAddToCart}
       />

@@ -1,16 +1,29 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Sparkles, Mic, ArrowUp, X, MessageCircle } from 'lucide-react';
+import { Sparkles, Mic, ArrowUp, X, MessageCircle, Square, ImageIcon } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { slidePanel, slideSheet } from '../lib/motion';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { PANEL_Z } from '../lib/panelLayers';
 import { buildAIContextLabel, type AIContext } from '../types/ai';
+import type { ChatMessage } from '../types/chat';
+import type { Product } from '../data/scenes';
+import { buildSystemPrompt } from '../lib/ai/systemPrompt';
+import { parseAssistantContent } from '../lib/ai/parseProducts';
+import { resolveProductsByIds } from '../lib/ai/catalog';
+import { streamOpenRouterChat, type ChatTurn } from '../lib/openrouter/chat';
+import { prepareImageForApi } from '../lib/openrouter/imageAttachment';
+import { hasOpenRouterConfig } from '../lib/openrouter/apiKey';
+import {
+  isSpeechRecognitionSupported,
+  startSpeechListen,
+} from '../lib/openrouter/speech';
+import AIProductSuggestions from './AIProductSuggestions';
 
-interface Message {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
+const PRODUCTS_TAG_DISPLAY = /\[PRODUCTS:[^\]]*\]\s*$/im;
+
+function stripProductsTag(text: string): string {
+  return text.replace(PRODUCTS_TAG_DISPLAY, '').trim();
 }
 
 export interface AIAssistantShellProps {
@@ -19,10 +32,12 @@ export interface AIAssistantShellProps {
   context: AIContext;
   initialQuery?: string;
   onClearInitialQuery?: () => void;
-  /** Show the collapsed FAB — false when another bottom overlay owns the space */
   showCollapsed: boolean;
   placement: 'shop' | 'visualizer';
   onChatActiveChange?: (active: boolean) => void;
+  onTryInRoom?: (product: Product) => void;
+  onAddToCart?: (product: Product) => void;
+  onProductClick?: (product: Product) => void;
 }
 
 function getWelcomeMessage(ctx: AIContext): string {
@@ -66,27 +81,25 @@ function getSuggestionChips(ctx: AIContext): string[] {
   ];
 }
 
-function mockReply(ctx: AIContext, userText: string): string {
-  const snippet = userText.length > 48 ? `${userText.slice(0, 48)}…` : userText;
-  if (ctx.surface === 'product' && ctx.product) {
-    return `For the ${ctx.product.name}: "${snippet}" — I'd lean toward neutral textures and a low profile so the room stays airy. Want me to suggest a rug or accent chair?`;
-  }
-  if (ctx.surface === 'visualizer') {
-    return `Looking at your room setup: "${snippet}" — we can adjust staging or swap a piece before the next render. Tell me if you want warmer tones or more minimal.`;
-  }
-  return `Got it — "${snippet}". I'll narrow our collection to pieces that match that vibe. Browse the grid or open Room visualizer when you're ready to see them in your space.`;
-}
-
 interface ChatBodyProps {
   context: AIContext;
   layout: 'sheet' | 'sidebar';
-  messages: Message[];
+  messages: ChatMessage[];
   isTyping: boolean;
+  isStreaming: boolean;
+  isListening: boolean;
+  voiceSupported: boolean;
   inputValue: string;
   onInputChange: (value: string) => void;
   onSend: (e?: React.FormEvent) => void;
   onSuggestion: (text: string) => void;
+  onToggleVoice: () => void;
   onClose: () => void;
+  onTryInRoom?: (product: Product) => void;
+  onAddToCart?: (product: Product) => void;
+  onProductClick?: (product: Product) => void;
+  attachedImageUrl: string | null;
+  onRemoveAttachment: () => void;
   inputRef: React.RefObject<HTMLInputElement | null>;
   messagesEndRef: React.RefObject<HTMLDivElement | null>;
 }
@@ -96,17 +109,26 @@ function ChatBody({
   layout,
   messages,
   isTyping,
+  isStreaming,
+  isListening,
+  voiceSupported,
   inputValue,
   onInputChange,
   onSend,
   onSuggestion,
+  onToggleVoice,
   onClose,
+  onTryInRoom,
+  onAddToCart,
+  onProductClick,
+  attachedImageUrl,
+  onRemoveAttachment,
   inputRef,
   messagesEndRef,
 }: ChatBodyProps) {
   const chips = useMemo(() => getSuggestionChips(context), [context]);
   const contextLabel = buildAIContextLabel(context);
-  const showSuggestions = messages.length <= 1 && !isTyping;
+  const showSuggestions = messages.length <= 1 && !isTyping && !messages.some((m) => m.role === 'assistant' && !m.content);
 
   return (
     <>
@@ -122,7 +144,7 @@ function ChatBody({
           </span>
           <div className="min-w-0">
             <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-ink-faint">
-              AI designer
+              Ask AI
             </p>
             <p className="truncate text-sm font-medium text-ink">{contextLabel}</p>
           </div>
@@ -145,28 +167,60 @@ function ChatBody({
           )}
         >
           <AnimatePresence initial={false}>
-            {messages.map((msg) => (
-              <motion.div
-                key={msg.id}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className={cn(
-                  'relative max-w-[92%] rounded-3xl p-3.5 text-sm leading-relaxed shadow-sm',
-                  msg.role === 'user'
-                    ? 'self-end rounded-br-md bg-ink text-cream'
-                    : 'glass-strong self-start rounded-bl-md text-ink'
-                )}
-              >
-                {msg.role === 'assistant' && (
-                  <div className="absolute -left-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-bronze shadow-sm">
-                    <Sparkles className="h-3 w-3 text-cream" />
+            {messages.map((msg) => {
+              const displayText =
+                msg.role === 'assistant' ? stripProductsTag(msg.content) : msg.content;
+              const products = msg.products ?? [];
+
+              return (
+                <motion.div
+                  key={msg.id}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  className={cn(
+                    'flex max-w-[92%] flex-col',
+                    msg.role === 'user' ? 'self-end' : 'self-start'
+                  )}
+                >
+                  <div
+                    className={cn(
+                      'relative rounded-3xl p-3.5 text-sm leading-relaxed shadow-sm',
+                      msg.role === 'user'
+                        ? 'rounded-br-md bg-ink text-cream'
+                        : cn(
+                            'glass-strong rounded-bl-md text-ink',
+                            msg.error && 'border border-red-200/80 bg-red-50/90 text-red-900'
+                          )
+                    )}
+                  >
+                    {msg.role === 'assistant' && !msg.error && (
+                      <div className="absolute -left-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-bronze shadow-sm">
+                        <Sparkles className="h-3 w-3 text-cream" />
+                      </div>
+                    )}
+                    {msg.role === 'user' && msg.imageUrl && (
+                      <img
+                        src={msg.imageUrl}
+                        alt="Attached room"
+                        className="mb-2 max-h-36 w-full rounded-2xl object-cover"
+                      />
+                    )}
+                    <span className="whitespace-pre-wrap">{displayText}</span>
                   </div>
-                )}
-                {msg.content}
-              </motion.div>
-            ))}
-            {isTyping && (
+
+                  {msg.role === 'assistant' && products.length > 0 && onTryInRoom && onAddToCart && (
+                    <AIProductSuggestions
+                      products={products}
+                      onTryInRoom={onTryInRoom}
+                      onAddToCart={onAddToCart}
+                      onProductClick={onProductClick}
+                    />
+                  )}
+                </motion.div>
+              );
+            })}
+            {isTyping && !messages.some((m) => m.role === 'assistant' && m.content === '') && (
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -215,30 +269,82 @@ function ChatBody({
             : 'px-5 py-4'
         )}
       >
+        {attachedImageUrl && (
+          <div
+            className={cn(
+              'mb-2 flex items-center gap-2',
+              layout === 'sheet' ? 'px-0' : 'px-0'
+            )}
+          >
+            <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl ring-1 ring-ink/10">
+              <img
+                src={attachedImageUrl}
+                alt="Staged room preview"
+                className="h-full w-full object-cover"
+              />
+              <span className="absolute bottom-0.5 left-0.5 flex items-center gap-0.5 rounded-md bg-ink/70 px-1 py-0.5 text-[9px] font-medium text-cream">
+                <ImageIcon className="h-2.5 w-2.5" />
+                Room
+              </span>
+            </div>
+            <p className="min-w-0 flex-1 text-xs text-ink-muted">
+              Staged room attached — your message will include this image.
+            </p>
+            <button
+              type="button"
+              onClick={onRemoveAttachment}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-ink-muted transition-colors hover:bg-ink/5 hover:text-ink"
+              aria-label="Remove attached room image"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
         <form
           onSubmit={onSend}
-          className="flex items-center gap-2 rounded-full border border-ink/10 bg-parchment/60 py-1.5 pl-4 pr-1.5 focus-within:border-bronze/25 focus-within:bg-parchment"
+          className={cn(
+            'flex items-center gap-2 rounded-full border py-1.5 pl-4 pr-1.5 transition-colors',
+            isListening
+              ? 'border-bronze/40 bg-bronze/8'
+              : 'border-ink/10 bg-parchment/60 focus-within:border-bronze/25 focus-within:bg-parchment'
+          )}
         >
           <input
             ref={inputRef}
             value={inputValue}
             onChange={(e) => onInputChange(e.target.value)}
-            placeholder="Ask about style, fit, or pairing…"
+            placeholder={
+              isListening ? 'Listening…' : 'Ask about style, fit, or pairing…'
+            }
             className="h-10 min-w-0 flex-1 border-none bg-transparent text-sm text-ink outline-none placeholder:text-ink-faint"
           />
-          <button
-            type="button"
-            className="hidden rounded-full p-2 text-ink-muted hover:bg-ink/5 hover:text-ink sm:flex"
-            aria-label="Voice input"
-          >
-            <Mic className="h-5 w-5" />
-          </button>
+          {voiceSupported && (
+            <button
+              type="button"
+              onClick={onToggleVoice}
+              className={cn(
+                'rounded-full p-2 transition-colors',
+                isListening
+                  ? 'bg-bronze text-cream'
+                  : 'text-ink-muted hover:bg-ink/5 hover:text-ink'
+              )}
+              aria-label={isListening ? 'Stop voice input' : 'Voice input'}
+            >
+              {isListening ? (
+                <Square className="h-5 w-5" fill="currentColor" />
+              ) : (
+                <Mic className="h-5 w-5" />
+              )}
+            </button>
+          )}
           <button
             type="submit"
-            disabled={!inputValue.trim()}
+            disabled={!inputValue.trim() || isTyping || isStreaming}
             className={cn(
               'flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bronze text-cream shadow-sm transition-all',
-              inputValue.trim() ? 'hover:bg-bronze/90 active:scale-95' : 'opacity-40'
+              inputValue.trim() && !isTyping && !isStreaming
+                ? 'hover:bg-bronze/90 active:scale-95'
+                : 'opacity-40'
             )}
             aria-label="Send message"
           >
@@ -250,7 +356,6 @@ function ChatBody({
   );
 }
 
-/** Compact header / toolbar trigger */
 export function AIAssistantTrigger({
   onClick,
   variant = 'light',
@@ -290,20 +395,36 @@ export default function AIAssistantShell({
   showCollapsed,
   placement,
   onChatActiveChange,
+  onTryInRoom,
+  onAddToCart,
+  onProductClick,
 }: AIAssistantShellProps) {
   const isDesktop = useMediaQuery('(min-width: 768px)');
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [streamingId, setStreamingId] = useState<string | null>(null);
+  const [isListening, setIsListening] = useState(false);
+  const [attachedImageUrl, setAttachedImageUrl] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const contextKeyRef = useRef<string>('');
+  const abortRef = useRef<AbortController | null>(null);
+  const stopSpeechRef = useRef<(() => void) | null>(null);
+  const voiceSupported = isSpeechRecognitionSupported();
 
-  /** True only after the user sends a message (welcome alone should not dim the hero). */
   const chatActive =
-    messages.some((m) => m.role === 'user') || isTyping;
-  const panelZ = placement === 'visualizer' && !isDesktop ? PANEL_Z.aiVisualizerExpanded : PANEL_Z.aiPanel;
-  const backdropZ = placement === 'visualizer' && !isDesktop ? PANEL_Z.aiVisualizerExpanded - 1 : PANEL_Z.aiBackdrop;
+    messages.some((m) => m.role === 'user') || isTyping || Boolean(streamingId);
+  const panelZ =
+    placement === 'visualizer' && !isDesktop
+      ? PANEL_Z.aiVisualizerExpanded
+      : PANEL_Z.aiPanel;
+  const backdropZ =
+    placement === 'visualizer' && !isDesktop
+      ? PANEL_Z.aiVisualizerExpanded - 1
+      : PANEL_Z.aiBackdrop;
+
+  const systemPrompt = useMemo(() => buildSystemPrompt(context), [context]);
 
   useEffect(() => {
     const notifyHero = placement === 'shop' && chatActive;
@@ -327,10 +448,25 @@ export default function AIAssistantShell({
   }, [open]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isTyping, open]);
+    return () => {
+      abortRef.current?.abort();
+      stopSpeechRef.current?.();
+    };
+  }, []);
 
-  const contextKey = `${context.surface}:${context.product?.id ?? ''}:${context.stagedProducts?.length ?? 0}`;
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isTyping, streamingId, open]);
+
+  const contextKey = `${context.surface}:${context.product?.id ?? ''}:${context.stagedProducts?.length ?? 0}:${context.categoryId ?? ''}:${context.visualizerStep ?? ''}:${context.roomImageUrl ? 'room' : ''}`;
+
+  useEffect(() => {
+    if (context.surface === 'visualizer' && context.roomImageUrl) {
+      setAttachedImageUrl(context.roomImageUrl);
+    } else if (context.surface !== 'visualizer') {
+      setAttachedImageUrl(null);
+    }
+  }, [context.surface, context.roomImageUrl]);
 
   useEffect(() => {
     if (!open) return;
@@ -348,22 +484,88 @@ export default function AIAssistantShell({
     }
   }, [open, context, contextKey, initialQuery, messages.length]);
 
-  const pushAssistantReply = useCallback(
-    (userText: string) => {
-      setIsTyping(true);
-      window.setTimeout(() => {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `a-${Date.now()}`,
-            role: 'assistant',
-            content: mockReply(context, userText),
-          },
-        ]);
-        setIsTyping(false);
-      }, 900);
+  const finalizeAssistantMessage = useCallback(
+    (messageId: string, rawContent: string, isError = false) => {
+      const { text, productIds } = parseAssistantContent(rawContent);
+      const products = resolveProductsByIds(productIds);
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId
+            ? {
+                ...m,
+                content: isError ? rawContent : text || rawContent,
+                productIds: isError ? undefined : productIds,
+                products: isError ? undefined : products,
+                error: isError,
+              }
+            : m
+        )
+      );
+      setIsTyping(false);
+      setStreamingId(null);
     },
-    [context]
+    []
+  );
+
+  const streamAssistantReply = useCallback(
+    (_userText: string, historyBefore: ChatMessage[]) => {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      const assistantId = `a-${Date.now()}`;
+      setStreamingId(assistantId);
+      setMessages((prev) => [
+        ...prev,
+        { id: assistantId, role: 'assistant', content: '' },
+      ]);
+
+      if (!hasOpenRouterConfig()) {
+        finalizeAssistantMessage(
+          assistantId,
+          'OpenRouter is not configured. Add VITE_OPENROUTER_API_KEY to your .env file and restart the dev server.',
+          true
+        );
+        return;
+      }
+
+      const history: ChatTurn[] = historyBefore
+        .filter((m) => m.id !== assistantId && !m.error)
+        .map((m) => ({
+          role: m.role,
+          content: m.role === 'assistant' ? stripProductsTag(m.content) : m.content,
+          imageDataUrl: m.role === 'user' ? m.imageDataUrl : undefined,
+        }));
+
+      let accumulated = '';
+
+      void streamOpenRouterChat(
+        systemPrompt,
+        history,
+        {
+          onToken: (chunk) => {
+            accumulated += chunk;
+            const display = stripProductsTag(accumulated);
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId ? { ...m, content: display || accumulated } : m
+              )
+            );
+          },
+          onDone: () => {
+            finalizeAssistantMessage(assistantId, accumulated);
+            abortRef.current = null;
+          },
+          onError: (message) => {
+            finalizeAssistantMessage(assistantId, message, true);
+            abortRef.current = null;
+          },
+        },
+        controller.signal
+      );
+    },
+    [systemPrompt, finalizeAssistantMessage]
   );
 
   useEffect(() => {
@@ -372,52 +574,140 @@ export default function AIAssistantShell({
     const query = initialQuery.trim();
     onClearInitialQuery?.();
 
-    setMessages((prev) => {
-      const already = prev.some((m) => m.role === 'user' && m.content === query);
-      if (already) return prev;
-      return [...prev, { id: `u-${Date.now()}`, role: 'user', content: query }];
-    });
-    pushAssistantReply(query);
-  }, [initialQuery, onClearInitialQuery, pushAssistantReply]);
+    void (async () => {
+      const displayImage = attachedImageUrl;
+      let imageDataUrl: string | undefined;
+      if (displayImage) {
+        try {
+          imageDataUrl = await prepareImageForApi(displayImage);
+        } catch {
+          imageDataUrl = undefined;
+        }
+      }
+
+      setMessages((prev) => {
+        const already = prev.some((m) => m.role === 'user' && m.content === query);
+        if (already) return prev;
+        const next: ChatMessage[] = [
+          ...prev,
+          {
+            id: `u-${Date.now()}`,
+            role: 'user',
+            content: query,
+            imageUrl: displayImage ?? undefined,
+            imageDataUrl,
+          },
+        ];
+        window.setTimeout(() => streamAssistantReply(query, next), 0);
+        return next;
+      });
+    })();
+  }, [initialQuery, onClearInitialQuery, streamAssistantReply, attachedImageUrl]);
 
   const sendText = useCallback(
-    (text: string) => {
+    async (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed) return;
+      if (!trimmed || isTyping || streamingId) return;
 
-      setMessages((prev) => [
-        ...prev,
-        { id: `u-${Date.now()}`, role: 'user', content: trimmed },
-      ]);
+      const displayImage = attachedImageUrl;
+      let imageDataUrl: string | undefined;
+      if (displayImage) {
+        try {
+          imageDataUrl = await prepareImageForApi(displayImage);
+        } catch (err) {
+          const msg =
+            err instanceof Error ? err.message : 'Could not attach the room image.';
+          setMessages((prev) => [
+            ...prev,
+            { id: `err-${Date.now()}`, role: 'assistant', content: msg, error: true },
+          ]);
+          return;
+        }
+      }
+
+      setMessages((prev) => {
+        const next: ChatMessage[] = [
+          ...prev,
+          {
+            id: `u-${Date.now()}`,
+            role: 'user',
+            content: trimmed,
+            imageUrl: displayImage ?? undefined,
+            imageDataUrl,
+          },
+        ];
+        streamAssistantReply(trimmed, next);
+        return next;
+      });
       setInputValue('');
-      pushAssistantReply(trimmed);
+      stopSpeechRef.current?.();
+      setIsListening(false);
     },
-    [pushAssistantReply]
+    [isTyping, streamingId, streamAssistantReply, attachedImageUrl]
   );
 
   const handleSend = (e?: React.FormEvent) => {
     e?.preventDefault();
-    sendText(inputValue);
+    void sendText(inputValue);
   };
 
-  const handleClose = () => onOpenChange(false);
+  const handleToggleVoice = useCallback(() => {
+    if (isListening) {
+      stopSpeechRef.current?.();
+      setIsListening(false);
+      return;
+    }
+
+    stopSpeechRef.current?.();
+    setIsListening(true);
+
+    stopSpeechRef.current = startSpeechListen({
+      lang: navigator.language || 'en-US',
+      onResult: (transcript) => setInputValue(transcript),
+      onError: (msg) => {
+        setInputValue((v) => v || '');
+        if (msg) {
+          setMessages((prev) => [
+            ...prev,
+            { id: `err-${Date.now()}`, role: 'assistant', content: msg, error: true },
+          ]);
+        }
+      },
+      onEnd: () => setIsListening(false),
+    });
+  }, [isListening]);
+
+  const handleClose = () => {
+    abortRef.current?.abort();
+    stopSpeechRef.current?.();
+    setIsListening(false);
+    onOpenChange(false);
+  };
 
   const chatBodyProps = {
     context,
     messages,
     isTyping,
+    isStreaming: Boolean(streamingId),
+    isListening,
+    voiceSupported,
     inputValue,
     onInputChange: setInputValue,
     onSend: handleSend,
-    onSuggestion: sendText,
+    onSuggestion: (text: string) => void sendText(text),
+    attachedImageUrl,
+    onRemoveAttachment: () => setAttachedImageUrl(null),
+    onToggleVoice: handleToggleVoice,
     onClose: handleClose,
+    onTryInRoom,
+    onAddToCart,
+    onProductClick,
     inputRef,
     messagesEndRef,
   };
 
   return (
     <>
-      {/* Collapsed FAB — never stacks above open modals */}
       <AnimatePresence>
         {showCollapsed && !open && (
           <motion.div
@@ -444,14 +734,16 @@ export default function AIAssistantShell({
               <Sparkles className="h-5 w-5 text-bronze" strokeWidth={1.75} />
               <span className="text-sm font-medium text-ink">Ask AI Designer</span>
               {chatActive && (
-                <span className="flex h-2 w-2 rounded-full bg-bronze" aria-label="Conversation in progress" />
+                <span
+                  className="flex h-2 w-2 rounded-full bg-bronze"
+                  aria-label="Conversation in progress"
+                />
               )}
             </button>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Expanded panel */}
       <AnimatePresence>
         {open && (
           <>

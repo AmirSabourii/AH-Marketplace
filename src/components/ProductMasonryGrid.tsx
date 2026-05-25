@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Check, Home, Sparkles } from 'lucide-react';
 import type { Product } from '../data/scenes';
@@ -23,6 +23,7 @@ interface ProductMasonryGridProps {
   isSidebar?: boolean;
   hasSavedRoom?: boolean;
   stagedProducts?: Product[];
+  placedProducts?: Product[];
   activeStagedProductId?: string | null;
 }
 
@@ -40,6 +41,7 @@ export default function ProductMasonryGrid({
   isSidebar = false,
   hasSavedRoom = false,
   stagedProducts,
+  placedProducts = [],
   activeStagedProductId,
 }: ProductMasonryGridProps) {
   const ASPECT_RATIOS = [
@@ -54,12 +56,40 @@ export default function ProductMasonryGrid({
     'aspect-[9/16]',
   ];
 
-const stagedIds = useMemo(
+  const stagedIds = useMemo(
     () => new Set(stagedProducts?.map((p) => p.id) ?? []),
     [stagedProducts]
   );
+  const placedIds = useMemo(
+    () => new Set(placedProducts?.map((p) => p.id) ?? []),
+    [placedProducts]
+  );
 
   const filteredItems = useFilteredCatalog(catalog, selectedCategory);
+
+  const prevActiveRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isSidebar || !activeStagedProductId) return;
+    if (prevActiveRef.current === activeStagedProductId) return;
+    prevActiveRef.current = activeStagedProductId;
+    const grid = document.getElementById('products-grid');
+    grid?.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [isSidebar, activeStagedProductId]);
+
+  const sortedFilteredItems = useMemo(() => {
+    if (!isSidebar) return filteredItems;
+
+    const priority = (productId: string) => {
+      if (activeStagedProductId === productId) return 0;
+      if (placedIds.has(productId)) return 1;
+      if (stagedIds.has(productId)) return 2;
+      return 3;
+    };
+
+    return [...filteredItems].sort(
+      (a, b) => priority(a.product.id) - priority(b.product.id)
+    );
+  }, [filteredItems, isSidebar, activeStagedProductId, placedIds, stagedIds]);
 
   return (
     <section
@@ -87,7 +117,9 @@ const stagedIds = useMemo(
         >
           <p className="mb-2 text-xs font-medium uppercase tracking-wider text-ink-muted">
             {hasSavedRoom
-              ? 'Tap to stage · tap again to remove'
+              ? placedIds.size > 0
+                ? 'In room · tap to add or remove'
+                : 'Tap to stage · tap again to remove'
               : 'Pick products to stage'}
           </p>
           <CategoryImagePicker
@@ -153,8 +185,9 @@ const stagedIds = useMemo(
         <AnimatePresence mode="popLayout">
           {!catalogLoading &&
             !catalogError &&
-            filteredItems.map(({ product, displayImage }, index) => {
+            sortedFilteredItems.map(({ product, displayImage }, index) => {
             const heightClass = ASPECT_RATIOS[index % ASPECT_RATIOS.length];
+            const isPlaced = placedIds.has(product.id);
             const isStaged = stagedIds.has(product.id);
             const isActive = activeStagedProductId === product.id;
 
@@ -175,8 +208,10 @@ const stagedIds = useMemo(
                   className={cn(
                     'relative w-full overflow-hidden rounded-2xl bg-parchment/60',
                     heightClass,
-                    isStaged && 'ring-2 ring-bronze',
-                    isActive && isStaged && 'ring-offset-2 ring-offset-cream'
+                    (isPlaced || isStaged) && 'ring-1 ring-ink/20',
+                    isActive &&
+                      (isPlaced || isStaged) &&
+                      'ring-ink/35 shadow-[0_0_0_1px_rgba(28,26,23,0.06)]'
                   )}
                 >
                   <img
@@ -187,9 +222,18 @@ const stagedIds = useMemo(
                   />
                   <div className="absolute inset-0 bg-ink/0 transition-colors duration-300 group-hover:bg-ink/10" />
 
-                  {isSidebar && isStaged && (
-                    <span className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-bronze text-cream shadow-sm">
-                      <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
+                  {isSidebar && (isPlaced || isStaged) && (
+                    <span
+                      className={cn(
+                        'absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full shadow-sm',
+                        isPlaced ? 'bg-ink text-cream' : 'bg-bronze text-cream'
+                      )}
+                    >
+                      {isPlaced ? (
+                        <Home className="h-3.5 w-3.5" strokeWidth={1.75} />
+                      ) : (
+                        <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
+                      )}
                     </span>
                   )}
 
@@ -213,25 +257,12 @@ const stagedIds = useMemo(
                     </motion.div>
                   )}
 
-                  {onTryInRoom && !isSidebar && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onTryInRoom(product);
-                      }}
-                      className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-cream/90 text-bronze shadow-sm backdrop-blur-sm transition-all active:scale-95 md:opacity-0 md:group-hover:opacity-100"
-                      aria-label={`Try ${product.name} in my room`}
-                    >
-                      <Home className="h-3.5 w-3.5" strokeWidth={1.75} />
-                    </button>
-                  )}
                 </motion.div>
 
                 <motion.div layout className="mt-2.5 flex flex-col px-1">
                   <div className="flex items-center justify-between gap-2">
                     <h3 className="line-clamp-1 text-sm font-medium text-ink">{product.name}</h3>
-                    <span className="shrink-0 font-display text-xs italic text-bronze">
+                    <span className="shrink-0 font-display text-sm font-medium italic text-bronze sm:text-base">
                       {product.price}
                     </span>
                   </div>

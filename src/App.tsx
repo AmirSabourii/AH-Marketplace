@@ -8,7 +8,7 @@ import VisualizerHeader from './components/VisualizerHeader';
 import AIAssistantShell from './components/AIAssistantShell';
 import TryInMyRoomView from './components/TryInMyRoomView';
 import { useMediaQuery } from './hooks/useMediaQuery';
-import type { AIContext } from './types/ai';
+import type { AIContext, AIVisualizerStep } from './types/ai';
 
 import UploadFlow from './components/UploadFlow';
 import { cn } from './lib/cn';
@@ -28,6 +28,7 @@ import CartDrawer from './components/CartDrawer';
 import UserModal, { type UserProfile } from './components/UserModal';
 import {
   addToCartItems,
+  cartItemKey,
   getCartCount,
   removeCartItem,
   updateCartItemQuantity,
@@ -47,12 +48,19 @@ function App() {
   );
   const [tryInRoomOpen, setTryInRoomOpen] = useState(false);
   const [stagedProducts, setStagedProducts] = useState<Product[]>([]);
+  const [placedProducts, setPlacedProducts] = useState<Product[]>([]);
   const [activeStagedProductId, setActiveStagedProductId] = useState<string | null>(null);
   const [hasSavedRoom, setHasSavedRoom] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
   const [aiInitialQuery, setAiInitialQuery] = useState('');
   const [aiContextProduct, setAiContextProduct] = useState<Product | null>(null);
+  const [visualizerRoomImageUrl, setVisualizerRoomImageUrl] = useState<string | null>(
+    null
+  );
+  const [visualizerStep, setVisualizerStep] = useState<AIVisualizerStep>('pick');
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
+  const [cartPulseKey, setCartPulseKey] = useState(0);
+  const [lastAddedCartItemId, setLastAddedCartItemId] = useState<string | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [userModalOpen, setUserModalOpen] = useState(false);
@@ -73,10 +81,18 @@ function App() {
     onToggleCompare: defaultVisualizerChrome.onToggleCompare,
   });
   const roomPhotoPickerRef = useRef<(() => void) | null>(null);
+  const removePlacedFromRoomRef = useRef<((productId: string) => void) | null>(null);
 
   const registerRoomPhotoPicker = useCallback((picker: (() => void) | null) => {
     roomPhotoPickerRef.current = picker;
   }, []);
+
+  const registerRemovePlacedFromRoom = useCallback(
+    (handler: ((productId: string) => void) | null) => {
+      removePlacedFromRoomRef.current = handler;
+    },
+    []
+  );
 
   const handleVisualizerChromeChange = useCallback((chrome: VisualizerChromeState) => {
     visualizerChromeHandlers.current = {
@@ -168,11 +184,22 @@ function App() {
     [closeSheet, scrollToGrid]
   );
 
+  const handleVisualizerContextChange = useCallback(
+    (ctx: { step: AIVisualizerStep; roomImageUrl: string | null }) => {
+      setVisualizerStep(ctx.step);
+      setVisualizerRoomImageUrl(ctx.roomImageUrl);
+    },
+    []
+  );
+
   const closeVisualizer = useCallback(() => {
     roomPhotoPickerRef.current = null;
     setTryInRoomOpen(false);
     setStagedProducts([]);
+    setPlacedProducts([]);
     setActiveStagedProductId(null);
+    setVisualizerRoomImageUrl(null);
+    setVisualizerStep('pick');
     setVisualizerChromeMeta({
       canShare: false,
       shareFeedback: 'idle',
@@ -185,11 +212,11 @@ function App() {
   const openProduct = useCallback(
     (product: Product) => {
       if (tryInRoomOpen) {
+        setActiveStagedProductId(product.id);
         setStagedProducts((prev) => {
           if (prev.some((p) => p.id === product.id)) return prev;
           return [...prev, product];
         });
-        setActiveStagedProductId(product.id);
         return;
       }
       setAiOpen(false);
@@ -199,14 +226,48 @@ function App() {
   );
 
   const handleRemoveStagedProduct = useCallback((productId: string) => {
-    setStagedProducts((prev) => {
-      const next = prev.filter((p) => p.id !== productId);
-      setActiveStagedProductId((activeId) => {
-        if (next.length === 0) return null;
-        return activeId === productId ? next[0].id : activeId;
-      });
-      return next;
+    setStagedProducts((prev) => prev.filter((p) => p.id !== productId));
+    setActiveStagedProductId((activeId) => {
+      if (activeId !== productId) return activeId;
+      return null;
     });
+  }, []);
+
+  useEffect(() => {
+    if (!tryInRoomOpen) return;
+    if (!activeStagedProductId) return;
+    const stillSelected =
+      placedProducts.some((p) => p.id === activeStagedProductId) ||
+      stagedProducts.some((p) => p.id === activeStagedProductId);
+    if (stillSelected) return;
+    const fallback =
+      placedProducts[0]?.id ?? stagedProducts[0]?.id ?? null;
+    setActiveStagedProductId(fallback);
+  }, [
+    tryInRoomOpen,
+    placedProducts,
+    stagedProducts,
+    activeStagedProductId,
+  ]);
+
+  const handleRemovePlacedProduct = useCallback((productId: string) => {
+    setPlacedProducts((prev) => {
+      const nextPlaced = prev.filter((p) => p.id !== productId);
+      setStagedProducts((staged) => {
+        const nextStaged = staged.filter((p) => p.id !== productId);
+        setActiveStagedProductId((activeId) => {
+          if (activeId !== productId) return activeId;
+          return nextPlaced[0]?.id ?? nextStaged[0]?.id ?? null;
+        });
+        return nextStaged;
+      });
+      return nextPlaced;
+    });
+  }, []);
+
+  const handlePlacedProductsChange = useCallback((products: Product[]) => {
+    setPlacedProducts(products);
+    setStagedProducts([]);
   }, []);
 
   const handleSidebarProductTap = useCallback(
@@ -215,24 +276,40 @@ function App() {
         openProduct(product);
         return;
       }
+
+      const isPlaced = placedProducts.some((p) => p.id === product.id);
       const isStaged = stagedProducts.some((p) => p.id === product.id);
-      if (isStaged) {
-        if (activeStagedProductId === product.id) {
-          handleRemoveStagedProduct(product.id);
+      const isSelected = isPlaced || isStaged;
+
+      if (isSelected && activeStagedProductId === product.id) {
+        if (isPlaced) {
+          removePlacedFromRoomRef.current?.(product.id) ??
+            handleRemovePlacedProduct(product.id);
         } else {
-          setActiveStagedProductId(product.id);
+          handleRemoveStagedProduct(product.id);
         }
         return;
       }
-      setStagedProducts((prev) => [...prev, product]);
+
+      if (isSelected) {
+        setActiveStagedProductId(product.id);
+        return;
+      }
+
+      setStagedProducts((prev) => {
+        if (prev.some((p) => p.id === product.id)) return prev;
+        return [...prev, product];
+      });
       setActiveStagedProductId(product.id);
     },
     [
       tryInRoomOpen,
       openProduct,
       stagedProducts,
+      placedProducts,
       activeStagedProductId,
       handleRemoveStagedProduct,
+      handleRemovePlacedProduct,
     ]
   );
 
@@ -347,17 +424,29 @@ function App() {
       const target =
         product ??
         activeProduct ??
+        placedProducts.find((p) => p.id === activeStagedProductId) ??
         stagedProducts.find((p) => p.id === activeStagedProductId) ??
+        placedProducts[0] ??
         stagedProducts[0];
       if (!target) return;
 
       const variantId = colorSelections[target.id];
+      const itemId = cartItemKey(target.id, variantId);
       setCartItems((items) => addToCartItems(items, target, variantId));
+      setCartPulseKey((k) => k + 1);
+      setLastAddedCartItemId(itemId);
       if (!tryInRoomOpen) {
         setActiveProduct(null);
       }
     },
-    [activeProduct, stagedProducts, activeStagedProductId, colorSelections, tryInRoomOpen]
+    [
+      activeProduct,
+      stagedProducts,
+      placedProducts,
+      activeStagedProductId,
+      colorSelections,
+      tryInRoomOpen,
+    ]
   );
 
   const handleUpdateCartQuantity = useCallback((itemId: string, quantity: number) => {
@@ -369,13 +458,17 @@ function App() {
   }, []);
 
   const cartCount = getCartCount(cartItems);
-  const stagedCount = stagedProducts.length;
+  const stagedCount = placedProducts.length || stagedProducts.length;
 
   const isDesktop = useMediaQuery('(min-width: 768px)');
 
   const aiContext = useMemo((): AIContext => {
-    const stagedActive = stagedProducts.find((p) => p.id === activeStagedProductId);
+    const stagedActive =
+      placedProducts.find((p) => p.id === activeStagedProductId) ??
+      stagedProducts.find((p) => p.id === activeStagedProductId);
     const product = aiContextProduct ?? activeProduct ?? stagedActive ?? null;
+    const roomProducts =
+      placedProducts.length > 0 ? placedProducts : stagedProducts;
 
     let surface: AIContext['surface'] = 'home';
     if (tryInRoomOpen) surface = 'visualizer';
@@ -385,15 +478,20 @@ function App() {
       surface,
       product,
       categoryId: selectedCategory,
-      stagedProducts: tryInRoomOpen ? stagedProducts : undefined,
+      stagedProducts: tryInRoomOpen ? roomProducts : undefined,
+      visualizerStep: tryInRoomOpen ? visualizerStep : undefined,
+      roomImageUrl: tryInRoomOpen ? visualizerRoomImageUrl : undefined,
     };
   }, [
     aiContextProduct,
     activeProduct,
     activeStagedProductId,
     stagedProducts,
+    placedProducts,
     selectedCategory,
     tryInRoomOpen,
+    visualizerStep,
+    visualizerRoomImageUrl,
   ]);
 
   const showAiCollapsed =
@@ -424,6 +522,7 @@ function App() {
       <div className={cn(tryInRoomOpen && 'max-lg:hidden')}>
         <AppHeader
           cartCount={cartCount}
+          cartPulseKey={cartPulseKey}
           onCartClick={openCart}
           onUserClick={() => setUserModalOpen(true)}
           onMyRoomClick={() => openVisualizer()}
@@ -482,6 +581,7 @@ function App() {
             isSidebar={tryInRoomOpen}
             hasSavedRoom={hasSavedRoom}
             stagedProducts={tryInRoomOpen ? stagedProducts : undefined}
+            placedProducts={tryInRoomOpen ? placedProducts : undefined}
             activeStagedProductId={tryInRoomOpen ? activeStagedProductId : undefined}
           />
         </motion.main>
@@ -497,6 +597,7 @@ function App() {
             >
               <VisualizerHeader
                 cartCount={cartCount}
+                cartPulseKey={cartPulseKey}
                 stagedCount={stagedCount}
                 onBackToShop={handleBackToShop}
                 onCartClick={openCart}
@@ -507,11 +608,15 @@ function App() {
                 variant="desktop"
                 catalog={catalog}
                 products={stagedProducts}
+                placedProducts={placedProducts}
                 activeProductId={activeStagedProductId}
                 colorSelections={colorSelections}
                 onColorSelect={selectProductColor}
                 onActiveProductChange={setActiveStagedProductId}
                 onRemoveProduct={handleRemoveStagedProduct}
+                onRemovePlacedProduct={handleRemovePlacedProduct}
+                onPlacedProductsChange={handlePlacedProductsChange}
+                registerRemovePlacedFromRoom={registerRemovePlacedFromRoom}
                 onClose={closeVisualizer}
                 onRoomSaved={refreshSavedRoomFlag}
                 onChromeChange={handleVisualizerChromeChange}
@@ -519,6 +624,7 @@ function App() {
                 onAddToCart={(product) => handleAddToCart(product)}
                 onElementPersonalize={handleElementPersonalize}
                 onOpenAI={(product) => handleOpenAI({ product: product ?? null })}
+                onVisualizerContextChange={handleVisualizerContextChange}
               />
             </motion.div>
           )}
@@ -534,6 +640,12 @@ function App() {
         showCollapsed={showAiCollapsed}
         placement={tryInRoomOpen ? 'visualizer' : 'shop'}
         onChatActiveChange={setHeroChatActive}
+        onTryInRoom={handleTryInRoom}
+        onAddToCart={(product) => handleAddToCart(product)}
+        onProductClick={(product) => {
+          setAiOpen(false);
+          openProduct(product);
+        }}
       />
 
       <ProductSheet
@@ -550,6 +662,7 @@ function App() {
         open={cartOpen}
         items={cartItems}
         colorSelections={colorSelections}
+        highlightItemId={lastAddedCartItemId}
         onClose={() => setCartOpen(false)}
         onUpdateQuantity={handleUpdateCartQuantity}
         onRemoveItem={handleRemoveCartItem}
@@ -578,11 +691,15 @@ function App() {
             variant="mobile"
             catalog={catalog}
             products={stagedProducts}
+              placedProducts={placedProducts}
               activeProductId={activeStagedProductId}
               colorSelections={colorSelections}
               onColorSelect={selectProductColor}
               onActiveProductChange={setActiveStagedProductId}
               onRemoveProduct={handleRemoveStagedProduct}
+              onRemovePlacedProduct={handleRemovePlacedProduct}
+              onPlacedProductsChange={handlePlacedProductsChange}
+              registerRemovePlacedFromRoom={registerRemovePlacedFromRoom}
               onClose={closeVisualizer}
               onRoomSaved={refreshSavedRoomFlag}
               onChromeChange={handleVisualizerChromeChange}
@@ -591,10 +708,12 @@ function App() {
               onElementPersonalize={handleElementPersonalize}
               onCartClick={openCart}
               cartCount={cartCount}
+              cartPulseKey={cartPulseKey}
               selectedCategory={selectedCategory}
               onCategorySelect={handleCategorySelect}
               onStageProduct={handleStageProduct}
             onOpenAI={(product) => handleOpenAI({ product: product ?? null })}
+            onVisualizerContextChange={handleVisualizerContextChange}
           />
         </div>
       )}

@@ -15,6 +15,7 @@ interface CartDrawerProps {
   open: boolean;
   items: CartItem[];
   colorSelections: Record<string, string>;
+  highlightItemId?: string | null;
   onClose: () => void;
   onUpdateQuantity: (itemId: string, quantity: number) => void;
   onRemoveItem: (itemId: string) => void;
@@ -25,6 +26,7 @@ interface CartDrawerProps {
 function CartBody({
   items,
   colorSelections,
+  highlightItemId,
   onClose,
   onUpdateQuantity,
   onRemoveItem,
@@ -93,19 +95,29 @@ function CartBody({
             {items.map((item, index) => {
               const image = getCartItemImage(item, colorSelections);
               const variantName = getCartItemVariantName(item);
+              const isHighlight = highlightItemId === item.id;
 
               return (
                 <motion.li
                   key={item.id}
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
+                  layout
+                  initial={{ opacity: 0, y: 16, scale: 0.97 }}
+                  animate={{
+                    opacity: 1,
+                    y: 0,
+                    scale: 1,
+                    backgroundColor: isHighlight
+                      ? ['rgba(184,114,58,0.14)', 'rgba(184,114,58,0)']
+                      : 'rgba(0,0,0,0)',
+                  }}
                   transition={{
                     type: 'spring',
                     stiffness: 340,
                     damping: 30,
-                    delay: index * 0.04,
+                    delay: isHighlight ? 0 : index * 0.04,
+                    backgroundColor: { duration: 1.2, ease: 'easeOut' },
                   }}
-                  className="flex gap-3 py-4 first:pt-2 last:pb-2"
+                  className="flex gap-3 rounded-2xl py-4 first:pt-2 last:pb-2"
                 >
                   <div className="relative h-[72px] w-[72px] shrink-0 overflow-hidden rounded-2xl bg-parchment/80 shadow-[0_2px_10px_rgba(28,26,23,0.06)]">
                     <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-bronze-soft/25 via-transparent to-transparent" />
@@ -231,6 +243,7 @@ export default function CartDrawer({
   open,
   items,
   colorSelections,
+  highlightItemId = null,
   onClose,
   onUpdateQuantity,
   onRemoveItem,
@@ -265,6 +278,7 @@ export default function CartDrawer({
               <CartBody
                 items={items}
                 colorSelections={colorSelections}
+                highlightItemId={highlightItemId}
                 onClose={onClose}
                 onUpdateQuantity={onUpdateQuantity}
                 onRemoveItem={onRemoveItem}
@@ -290,6 +304,7 @@ export default function CartDrawer({
               <CartBody
                 items={items}
                 colorSelections={colorSelections}
+                highlightItemId={highlightItemId}
                 onClose={onClose}
                 onUpdateQuantity={onUpdateQuantity}
                 onRemoveItem={onRemoveItem}
