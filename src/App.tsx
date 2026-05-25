@@ -194,6 +194,44 @@ function App() {
     [tryInRoomOpen]
   );
 
+  const handleRemoveStagedProduct = useCallback((productId: string) => {
+    setStagedProducts((prev) => {
+      const next = prev.filter((p) => p.id !== productId);
+      setActiveStagedProductId((activeId) => {
+        if (next.length === 0) return null;
+        return activeId === productId ? next[0].id : activeId;
+      });
+      return next;
+    });
+  }, []);
+
+  const handleSidebarProductTap = useCallback(
+    (product: Product) => {
+      if (!tryInRoomOpen) {
+        openProduct(product);
+        return;
+      }
+      const isStaged = stagedProducts.some((p) => p.id === product.id);
+      if (isStaged) {
+        if (activeStagedProductId === product.id) {
+          handleRemoveStagedProduct(product.id);
+        } else {
+          setActiveStagedProductId(product.id);
+        }
+        return;
+      }
+      setStagedProducts((prev) => [...prev, product]);
+      setActiveStagedProductId(product.id);
+    },
+    [
+      tryInRoomOpen,
+      openProduct,
+      stagedProducts,
+      activeStagedProductId,
+      handleRemoveStagedProduct,
+    ]
+  );
+
   const openCart = useCallback(() => {
     setAiOpen(false);
     setCartOpen(true);
@@ -209,17 +247,6 @@ function App() {
     },
     [openVisualizer]
   );
-
-  const handleRemoveStagedProduct = useCallback((productId: string) => {
-    setStagedProducts((prev) => {
-      const next = prev.filter((p) => p.id !== productId);
-      setActiveStagedProductId((activeId) => {
-        if (next.length === 0) return null;
-        return activeId === productId ? next[0].id : activeId;
-      });
-      return next;
-    });
-  }, []);
 
   const handleStageProduct = useCallback((product: Product) => {
     setStagedProducts((prev) => {
@@ -429,19 +456,21 @@ function App() {
               onCategorySelect={handleCategorySelect}
               onPromptSubmit={(query) => handleOpenAI({ query })}
               onUpload={() => setUploadOpen(true)}
-              chatActive={heroChatActive}
+              chatActive={heroChatActive && aiOpen && !tryInRoomOpen}
             />
           </div>
 
           <ProductMasonryGrid
             selectedCategory={selectedCategory}
-            onProductClick={openProduct}
+            onProductClick={tryInRoomOpen ? handleSidebarProductTap : openProduct}
             onTryInRoom={handleTryInRoom}
             onCategorySelect={handleCategorySelect}
             onOpenAI={() => handleOpenAI()}
             onOpenVisualizer={() => openVisualizer()}
             isSidebar={tryInRoomOpen}
             hasSavedRoom={hasSavedRoom}
+            stagedProducts={tryInRoomOpen ? stagedProducts : undefined}
+            activeStagedProductId={tryInRoomOpen ? activeStagedProductId : undefined}
           />
         </motion.main>
 

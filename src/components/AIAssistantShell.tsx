@@ -299,14 +299,17 @@ export default function AIAssistantShell({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const contextKeyRef = useRef<string>('');
 
-  const chatActive = messages.length > 0 || isTyping;
+  /** True only after the user sends a message (welcome alone should not dim the hero). */
+  const chatActive =
+    messages.some((m) => m.role === 'user') || isTyping;
   const panelZ = placement === 'visualizer' && !isDesktop ? PANEL_Z.aiVisualizerExpanded : PANEL_Z.aiPanel;
   const backdropZ = placement === 'visualizer' && !isDesktop ? PANEL_Z.aiVisualizerExpanded - 1 : PANEL_Z.aiBackdrop;
 
   useEffect(() => {
-    onChatActiveChange?.(chatActive);
+    const notifyHero = placement === 'shop' && chatActive;
+    onChatActiveChange?.(notifyHero);
     return () => onChatActiveChange?.(false);
-  }, [chatActive, onChatActiveChange]);
+  }, [chatActive, onChatActiveChange, placement]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

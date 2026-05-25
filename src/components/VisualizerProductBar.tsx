@@ -54,6 +54,11 @@ export default function VisualizerProductBar({
     : '';
   const hasMultiple = products.length > 1;
 
+  const previewLabel = hasMultiple ? 'Preview all' : 'Preview';
+  const previewAriaLabel = hasMultiple
+    ? `Preview all ${products.length} items in your room`
+    : 'Preview in your room';
+
   const goToSibling = (delta: number) => {
     if (!hasMultiple || activeIndex < 0) return;
     const next = products[(activeIndex + delta + products.length) % products.length];
@@ -101,7 +106,6 @@ export default function VisualizerProductBar({
                 exit={{ opacity: 0 }}
                 className="flex items-center gap-2.5 px-3 py-2.5 sm:gap-3 sm:px-3.5 sm:py-3"
               >
-                {/* Thumb */}
                 <div className="relative shrink-0">
                   <div className="glass-chip flex h-12 w-12 items-center justify-center overflow-hidden rounded-xl">
                     <img
@@ -122,7 +126,6 @@ export default function VisualizerProductBar({
                   )}
                 </div>
 
-                {/* Info — name, price, and swatches stay on separate rows; swatches never wrap */}
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-2">
                     <p className="min-w-0 flex-1 truncate text-xs leading-snug text-ink-muted">
@@ -160,14 +163,13 @@ export default function VisualizerProductBar({
                   </p>
                 </div>
 
-                {/* Nav */}
                 {hasMultiple && (
                   <div className="flex shrink-0 items-center gap-0.5 border-l border-white/40 pl-2.5">
                     <button
                       type="button"
                       onClick={() => goToSibling(-1)}
                       className="flex h-8 w-8 items-center justify-center rounded-full text-ink-muted hover:bg-white/35 hover:text-ink active:scale-95"
-                      aria-label="Previous product"
+                      aria-label="Previous staged product"
                     >
                       <ChevronLeft className="h-3.5 w-3.5" strokeWidth={2} />
                     </button>
@@ -178,14 +180,13 @@ export default function VisualizerProductBar({
                       type="button"
                       onClick={() => goToSibling(1)}
                       className="flex h-8 w-8 items-center justify-center rounded-full text-ink-muted hover:bg-white/35 hover:text-ink active:scale-95"
-                      aria-label="Next product"
+                      aria-label="Next staged product"
                     >
                       <ChevronRight className="h-3.5 w-3.5" strokeWidth={2} />
                     </button>
                   </div>
                 )}
 
-                {/* Actions */}
                 <div className="flex shrink-0 items-center gap-2 border-l border-white/40 pl-2.5">
                   {step === 'result' ? (
                     <button
@@ -201,6 +202,7 @@ export default function VisualizerProductBar({
                       type="button"
                       onClick={onPreview}
                       disabled={!canPreview}
+                      aria-label={previewAriaLabel}
                       className={cn(
                         'flex h-9 items-center gap-1.5 rounded-full px-3.5 text-xs font-semibold transition-all',
                         canPreview
@@ -209,9 +211,7 @@ export default function VisualizerProductBar({
                       )}
                     >
                       <Sparkles className="h-3 w-3" strokeWidth={2} />
-                      <span className="hidden min-[380px]:inline">
-                        Preview{hasMultiple ? ` ·${products.length}` : ''}
-                      </span>
+                      <span className="hidden min-[380px]:inline">{previewLabel}</span>
                     </button>
                   )}
                   <button

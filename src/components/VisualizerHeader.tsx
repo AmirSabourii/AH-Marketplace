@@ -2,13 +2,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft,
   Check,
-  Home,
   ImagePlus,
-  MessageCircle,
   Share2,
   ShoppingBag,
   SlidersHorizontal,
 } from 'lucide-react';
+import AskAiToolbarButton from './AskAiToolbarButton';
 import { cn } from '../lib/cn';
 import type { VisualizerChromeState } from './visualizerChrome';
 
@@ -59,24 +58,17 @@ export default function VisualizerHeader({
         <button
           type="button"
           onClick={onBackToShop}
-          className="flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3 text-cream/90 transition-all duration-200 hover:bg-white/10 active:scale-95"
+          className="relative flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3 text-cream/90 transition-all duration-200 hover:bg-white/10 active:scale-95"
           aria-label="Back to shop"
         >
           <ArrowLeft className="h-4 w-4" strokeWidth={1.75} />
           <span className="text-xs font-medium">Shop</span>
-        </button>
-
-        <HeaderDivider />
-
-        <div className="flex shrink-0 items-center gap-2 px-2.5 sm:px-3">
-          <Home className="h-4 w-4 shrink-0 text-bronze-soft" strokeWidth={1.75} />
-            <span className="whitespace-nowrap text-sm font-medium text-cream">Room visualizer</span>
           {stagedCount > 0 && (
             <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-bronze px-1.5 text-[10px] font-semibold text-cream">
               {stagedCount}
             </span>
           )}
-        </div>
+        </button>
 
         <HeaderDivider />
 
@@ -145,14 +137,7 @@ export default function VisualizerHeader({
 
         {onOpenAI && (
           <>
-            <button
-              type="button"
-              onClick={onOpenAI}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-cream/90 transition-all duration-200 hover:bg-white/10 active:scale-95"
-              aria-label="Open AI designer"
-            >
-              <MessageCircle className="h-4 w-4 text-bronze-soft" strokeWidth={1.75} />
-            </button>
+            <AskAiToolbarButton onClick={onOpenAI} variant="dark" />
             <HeaderDivider />
           </>
         )}
