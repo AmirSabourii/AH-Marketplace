@@ -171,3 +171,73 @@ body {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* ASK AI — animated bronze / amber / plum gradient */
+@keyframes ask-ai-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+@keyframes ask-ai-shine {
+  0% {
+    transform: translateX(-120%) skewX(-12deg);
+    opacity: 0;
+  }
+  35% {
+    opacity: 0.55;
+  }
+  100% {
+    transform: translateX(220%) skewX(-12deg);
+    opacity: 0;
+  }
+}
+
+.ask-ai-btn {
+  background: linear-gradient(
+    120deg,
+    #9a4f2a 0%,
+    #b8723a 22%,
+    #e8b87a 45%,
+    #c47b5c 62%,
+    #7a4d6a 82%,
+    #b8723a 100%
+  );
+  background-size: 240% 240%;
+  animation: ask-ai-flow 5s ease-in-out infinite;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 4px 18px rgba(184, 114, 58, 0.32);
+}
+
+.ask-ai-btn-shine {
+  background: linear-gradient(
+    105deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.45) 48%,
+    transparent 100%
+  );
+  animation: ask-ai-shine 3.2s ease-in-out infinite;
+}
+
+.ask-ai-btn:hover {
+  filter: brightness(1.06);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ask-ai-btn {
+    animation: none;
+    background-position: 50% 50%;
+  }
+  .ask-ai-btn-shine {
+    animation: none;
+    opacity: 0;
+  }
+}

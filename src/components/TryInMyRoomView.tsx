@@ -38,6 +38,7 @@ import {
   type RoomSceneAnalysis,
 } from '../lib/roomAnalysis';
 import { loadRoomPhoto, saveRoomPhoto } from '../lib/savedRoom';
+import AskAiToolbarButton from './AskAiToolbarButton';
 import { cn } from '../lib/cn';
 import VisualizerLoading3D from './VisualizerLoading3D';
 import CompareSlider from './CompareSlider';
@@ -162,12 +163,16 @@ export default function TryInMyRoomView({
   const handleCatalogProductTap = useCallback(
     (product: Product) => {
       if (stagedIds.has(product.id)) {
-        onActiveProductChange(product.id);
+        if (activeProduct?.id === product.id) {
+          onRemoveProduct(product.id);
+        } else {
+          onActiveProductChange(product.id);
+        }
       } else {
         onStageProduct?.(product);
       }
     },
-    [stagedIds, onActiveProductChange, onStageProduct]
+    [stagedIds, activeProduct, onActiveProductChange, onRemoveProduct, onStageProduct]
   );
 
   const revokePreview = () => {
@@ -671,17 +676,7 @@ export default function TryInMyRoomView({
               </button>
 
               {onOpenAI && (
-                <button
-                  type="button"
-                  onClick={() => onOpenAI()}
-                  className={cn(
-                    'flex h-9 w-9 items-center justify-center rounded-full transition-all active:scale-95',
-                    step !== 'pick' ? 'glass-dark text-cream/90' : 'glass text-ink'
-                  )}
-                  aria-label="Open AI designer"
-                >
-                  <MessageCircle className="h-4 w-4 text-bronze" strokeWidth={1.75} />
-                </button>
+                <AskAiToolbarButton onClick={() => onOpenAI()} variant="dark" />
               )}
 
               <button
@@ -730,14 +725,14 @@ export default function TryInMyRoomView({
                   )}
                 >
                   {tab === 'products' ? 'Products' : 'Details'}
-                  {tab === 'products' && catalogProducts.length > 0 && (
+                  {tab === 'products' && (products.length > 0 || catalogProducts.length > 0) && (
                     <span
                       className={cn(
                         'flex h-4 min-w-4 items-center justify-center rounded-full px-0.5 text-[9px] font-bold',
                         activeTab === 'products' ? 'bg-cream/20 text-cream' : 'bg-ink/12 text-ink'
                       )}
                     >
-                      {catalogProducts.length}
+                      {products.length > 0 ? products.length : catalogProducts.length}
                     </span>
                   )}
                 </button>
@@ -768,7 +763,7 @@ export default function TryInMyRoomView({
 
                 <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain no-scrollbar px-4 py-3">
                   <p className="mb-3 text-[10px] font-medium uppercase tracking-[0.18em] text-ink-faint">
-                    Tap to add to your room
+                    Tap to stage · tap again to remove
                   </p>
                   <div className="columns-2 gap-2.5">
                     {catalogProducts.map(({ product, sceneImage }, index) => {
@@ -781,15 +776,14 @@ export default function TryInMyRoomView({
                           key={product.id}
                           type="button"
                           onClick={() => handleCatalogProductTap(product)}
-                          className={cn(
-                            'group relative mb-2.5 flex w-full break-inside-avoid flex-col text-left transition-all active:scale-[0.98]',
-                            isActive && 'rounded-2xl ring-2 ring-bronze ring-offset-2 ring-offset-cream'
-                          )}
+                          className="group relative mb-2.5 flex w-full break-inside-avoid flex-col text-left transition-all active:scale-[0.98]"
                         >
                           <div
                             className={cn(
                               'relative w-full overflow-hidden rounded-2xl bg-parchment/60',
-                              heightClass
+                              heightClass,
+                              isStaged && 'ring-2 ring-bronze',
+                              isActive && isStaged && 'ring-offset-2 ring-offset-cream'
                             )}
                           >
                             <img
@@ -832,28 +826,32 @@ export default function TryInMyRoomView({
                   className="shrink-0 border-t border-ink/8 bg-cream/95 px-4 py-3 backdrop-blur-md"
                   style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
                 >
-                  {hasProducts && activeProduct ? (
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <p className="min-w-0 truncate text-xs text-ink-muted">
-                        <span className="font-semibold text-ink">{activeProduct.name}</span>
-                        {products.length > 1 && (
-                          <span className="text-ink-faint">
-                            {' '}
-                            · {products.length} staged
-                          </span>
-                        )}
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => setActiveTab('details')}
-                        className="shrink-0 text-[11px] font-semibold text-bronze"
-                      >
-                        Details →
-                      </button>
-                    </div>
-                  ) : (
+                  {!hasProducts ? (
                     <p className="mb-2 text-center text-[11px] text-ink-muted">
                       Tap a product to stage it in your room
+                    </p>
+                  ) : (
+                    <p className="mb-2 text-center text-[11px] text-ink-muted">
+                      {products.length > 1 ? (
+                        <>
+                          <span className="font-semibold text-ink">Preview all</span>
+                          {' '}
+                          stages {products.length} pieces in your room
+                        </>
+                      ) : (
+                        <>
+                          Details for each piece in the{' '}
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('details')}
+                            className="font-semibold text-bronze"
+                          >
+                            Details
+                          </button>
+                          {' '}
+                          tab
+                        </>
+                      )}
                     </p>
                   )}
                   <div className="flex gap-2">
@@ -878,7 +876,7 @@ export default function TryInMyRoomView({
                       ) : (
                         <>
                           <Sparkles className="h-4 w-4" strokeWidth={2} />
-                          Preview room
+                          {products.length > 1 ? 'Preview all' : 'Preview room'}
                         </>
                       )}
                     </button>
@@ -1068,7 +1066,7 @@ export default function TryInMyRoomView({
                       ) : (
                         <>
                           <Sparkles className="h-4 w-4" strokeWidth={2} />
-                          Preview room
+                          {products.length > 1 ? 'Preview all' : 'Preview room'}
                         </>
                       )}
                     </button>

@@ -1,5 +1,6 @@
+import { useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Home, Sparkles } from 'lucide-react';
+import { Check, Home, Sparkles } from 'lucide-react';
 import type { Product } from '../data/scenes';
 import type { CategoryId } from '../data/categories';
 import type { CatalogItem } from '../lib/medusa/products';
@@ -21,6 +22,8 @@ interface ProductMasonryGridProps {
   onOpenVisualizer?: () => void;
   isSidebar?: boolean;
   hasSavedRoom?: boolean;
+  stagedProducts?: Product[];
+  activeStagedProductId?: string | null;
 }
 
 export default function ProductMasonryGrid({
@@ -36,6 +39,8 @@ export default function ProductMasonryGrid({
   onOpenVisualizer,
   isSidebar = false,
   hasSavedRoom = false,
+  stagedProducts,
+  activeStagedProductId,
 }: ProductMasonryGridProps) {
   const ASPECT_RATIOS = [
     'aspect-[3/4]',
@@ -48,6 +53,11 @@ export default function ProductMasonryGrid({
     'aspect-[16/9]',
     'aspect-[9/16]',
   ];
+
+const stagedIds = useMemo(
+    () => new Set(stagedProducts?.map((p) => p.id) ?? []),
+    [stagedProducts]
+  );
 
   const filteredItems = useFilteredCatalog(catalog, selectedCategory);
 
@@ -76,7 +86,9 @@ export default function ProductMasonryGrid({
           className="sticky top-0 z-20 -mx-4 mb-6 bg-cream/95 px-4 pb-4 pt-2 backdrop-blur-sm"
         >
           <p className="mb-2 text-xs font-medium uppercase tracking-wider text-ink-muted">
-            {hasSavedRoom ? 'Tap to add to your room' : 'Pick products to stage'}
+            {hasSavedRoom
+              ? 'Tap to stage · tap again to remove'
+              : 'Pick products to stage'}
           </p>
           <CategoryImagePicker
             selectedCategory={selectedCategory}
@@ -143,6 +155,8 @@ export default function ProductMasonryGrid({
             !catalogError &&
             filteredItems.map(({ product, displayImage }, index) => {
             const heightClass = ASPECT_RATIOS[index % ASPECT_RATIOS.length];
+            const isStaged = stagedIds.has(product.id);
+            const isActive = activeStagedProductId === product.id;
 
             return (
               <motion.div
@@ -160,7 +174,9 @@ export default function ProductMasonryGrid({
                   transition={{ type: 'spring', stiffness: 400, damping: 28 }}
                   className={cn(
                     'relative w-full overflow-hidden rounded-2xl bg-parchment/60',
-                    heightClass
+                    heightClass,
+                    isStaged && 'ring-2 ring-bronze',
+                    isActive && isStaged && 'ring-offset-2 ring-offset-cream'
                   )}
                 >
                   <img
@@ -171,7 +187,13 @@ export default function ProductMasonryGrid({
                   />
                   <div className="absolute inset-0 bg-ink/0 transition-colors duration-300 group-hover:bg-ink/10" />
 
-                  {onTryInRoom && (
+                  {isSidebar && isStaged && (
+                    <span className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-bronze text-cream shadow-sm">
+                      <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
+                    </span>
+                  )}
+
+                  {onTryInRoom && !isSidebar && (
                     <motion.div
                       initial={false}
                       className="absolute inset-x-0 bottom-0 hidden translate-y-2 justify-center p-3 opacity-0 transition-all duration-300 group-hover:translate-y-0 group-hover:opacity-100 md:flex"
@@ -191,7 +213,7 @@ export default function ProductMasonryGrid({
                     </motion.div>
                   )}
 
-                  {onTryInRoom && (
+                  {onTryInRoom && !isSidebar && (
                     <button
                       type="button"
                       onClick={(e) => {
