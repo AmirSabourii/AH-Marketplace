@@ -182,6 +182,8 @@ export async function streamRoomStage(
   }
 ): Promise<StageComplete> {
   const mode = body.mode ?? 'compose';
+  // Compose/remove use Medusa SSE (same as pre-mock-catalog). Rearrange/curate stay
+  // on client Gemini so new visualizer actions keep working without backend changes.
   const useClient =
     !getMedusaPublishableKey() ||
     mode === 'rearrange' ||

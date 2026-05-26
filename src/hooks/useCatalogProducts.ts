@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { CategoryId } from '../data/categories';
-import { fetchCatalog } from '../lib/catalog';
-import type { CatalogItem } from '../lib/medusa/products';
+import {
+  fetchMarketplaceCatalog,
+  type CatalogItem,
+} from '../lib/medusa/products';
 
 type CatalogState = {
   items: CatalogItem[];
@@ -22,7 +24,7 @@ export function useCatalogProducts(): CatalogState {
     setLoading(true);
     setError(null);
     try {
-      const catalog = await fetchCatalog();
+      const catalog = await fetchMarketplaceCatalog('all');
       setItems(catalog);
     } catch (e) {
       const message =

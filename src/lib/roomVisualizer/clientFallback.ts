@@ -44,7 +44,7 @@ function resolveVisualizerInputs(body: {
   const products = productsByIds(body.productIds ?? []);
   if (products.length === 0 && (body.productIds?.length ?? 0) > 0) {
     throw new Error(
-      'Could not resolve product images for staging. Try again or switch to mock catalog.'
+      'Could not resolve product images for staging. Reload the catalog and try again.'
     );
   }
   return productsToVisualizerInput(products);
