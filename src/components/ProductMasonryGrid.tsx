@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Check, Home, Sparkles } from 'lucide-react';
+import { Home, ListChecks, Plus, Sparkles } from 'lucide-react';
 import type { Product } from '../data/scenes';
 import type { CategoryId } from '../data/categories';
 import type { CatalogItem } from '../lib/medusa/products';
 import { useFilteredCatalog } from '../hooks/useCatalogProducts';
 import CategoryImagePicker from './CategoryImagePicker';
 import ShoppingPipeline from './ShoppingPipeline';
+import VisualizerSelectionStrip from './VisualizerSelectionStrip';
 import { cn } from '../lib/cn';
 
 interface ProductMasonryGridProps {
@@ -25,6 +26,9 @@ interface ProductMasonryGridProps {
   stagedProducts?: Product[];
   placedProducts?: Product[];
   activeStagedProductId?: string | null;
+  onFocusStagedProduct?: (productId: string) => void;
+  onRemoveStagedProduct?: (productId: string) => void;
+  onRemovePlacedProduct?: (productId: string) => void;
 }
 
 export default function ProductMasonryGrid({
@@ -40,9 +44,12 @@ export default function ProductMasonryGrid({
   onOpenVisualizer,
   isSidebar = false,
   hasSavedRoom = false,
-  stagedProducts,
+  stagedProducts = [],
   placedProducts = [],
   activeStagedProductId,
+  onFocusStagedProduct,
+  onRemoveStagedProduct,
+  onRemovePlacedProduct,
 }: ProductMasonryGridProps) {
   const ASPECT_RATIOS = [
     'aspect-[3/4]',
@@ -66,30 +73,6 @@ export default function ProductMasonryGrid({
   );
 
   const filteredItems = useFilteredCatalog(catalog, selectedCategory);
-
-  const prevActiveRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!isSidebar || !activeStagedProductId) return;
-    if (prevActiveRef.current === activeStagedProductId) return;
-    prevActiveRef.current = activeStagedProductId;
-    const grid = document.getElementById('products-grid');
-    grid?.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [isSidebar, activeStagedProductId]);
-
-  const sortedFilteredItems = useMemo(() => {
-    if (!isSidebar) return filteredItems;
-
-    const priority = (productId: string) => {
-      if (activeStagedProductId === productId) return 0;
-      if (placedIds.has(productId)) return 1;
-      if (stagedIds.has(productId)) return 2;
-      return 3;
-    };
-
-    return [...filteredItems].sort(
-      (a, b) => priority(a.product.id) - priority(b.product.id)
-    );
-  }, [filteredItems, isSidebar, activeStagedProductId, placedIds, stagedIds]);
 
   return (
     <section
@@ -116,12 +99,21 @@ export default function ProductMasonryGrid({
           className="sticky top-0 z-20 -mx-4 mb-6 bg-cream/95 px-4 pb-4 pt-2 backdrop-blur-sm"
         >
           <p className="mb-2 text-xs font-medium uppercase tracking-wider text-ink-muted">
-            {hasSavedRoom
-              ? placedIds.size > 0
-                ? 'In room · tap to add or remove'
-                : 'Tap to stage · tap again to remove'
-              : 'Pick products to stage'}
+            {hasSavedRoom ? 'Add to your room' : 'Pick products to preview'}
           </p>
+          {onFocusStagedProduct &&
+            onRemoveStagedProduct &&
+            onRemovePlacedProduct && (
+              <VisualizerSelectionStrip
+                catalog={catalog}
+                stagedProducts={stagedProducts}
+                placedProducts={placedProducts}
+                activeProductId={activeStagedProductId ?? null}
+                onFocusProduct={onFocusStagedProduct}
+                onRemoveStaged={onRemoveStagedProduct}
+                onRemovePlaced={onRemovePlacedProduct}
+              />
+            )}
           <CategoryImagePicker
             selectedCategory={selectedCategory}
             onSelectCategory={onCategorySelect}
@@ -176,16 +168,16 @@ export default function ProductMasonryGrid({
       )}
 
       <motion.div
-        layout
+        layout={!isSidebar}
         className={cn(
           'gap-4',
           isSidebar ? 'columns-2' : 'columns-2 md:columns-3 lg:columns-4 sm:gap-6'
         )}
       >
-        <AnimatePresence mode="popLayout">
+        <AnimatePresence mode={isSidebar ? 'sync' : 'popLayout'}>
           {!catalogLoading &&
             !catalogError &&
-            sortedFilteredItems.map(({ product, displayImage }, index) => {
+            filteredItems.map(({ product, displayImage }, index) => {
             const heightClass = ASPECT_RATIOS[index % ASPECT_RATIOS.length];
             const isPlaced = placedIds.has(product.id);
             const isStaged = stagedIds.has(product.id);
@@ -193,7 +185,7 @@ export default function ProductMasonryGrid({
 
             return (
               <motion.div
-                layout
+                layout={!isSidebar}
                 key={product.id}
                 initial={{ opacity: 0, scale: 0.95, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -222,17 +214,24 @@ export default function ProductMasonryGrid({
                   />
                   <div className="absolute inset-0 bg-ink/0 transition-colors duration-300 group-hover:bg-ink/10" />
 
-                  {isSidebar && (isPlaced || isStaged) && (
+                  {isSidebar && (
                     <span
                       className={cn(
-                        'absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full shadow-sm',
-                        isPlaced ? 'bg-ink text-cream' : 'bg-bronze text-cream'
+                        'absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full shadow-sm backdrop-blur-sm',
+                        isPlaced
+                          ? 'bg-ink text-cream'
+                          : isStaged
+                            ? 'bg-bronze text-cream'
+                            : 'bg-cream/95 text-ink-muted ring-1 ring-ink/10'
                       )}
+                      aria-hidden
                     >
                       {isPlaced ? (
                         <Home className="h-3.5 w-3.5" strokeWidth={1.75} />
+                      ) : isStaged ? (
+                        <ListChecks className="h-3.5 w-3.5" strokeWidth={2} />
                       ) : (
-                        <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
+                        <Plus className="h-3.5 w-3.5" strokeWidth={2} />
                       )}
                     </span>
                   )}

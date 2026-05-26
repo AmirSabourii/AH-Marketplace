@@ -69,7 +69,7 @@ export default function RoomSceneFrame({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.35 }}
-            className="block h-full w-full object-cover"
+            className="block h-full w-full object-contain"
             draggable={false}
             onLoad={(e) => {
               const img = e.currentTarget;

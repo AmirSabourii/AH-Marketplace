@@ -11,6 +11,8 @@ import {
   SlidersHorizontal,
   Share2,
   Check,
+  ListChecks,
+  Plus,
   Sparkles,
   Home,
 } from 'lucide-react';
@@ -27,6 +29,14 @@ import CategoryImagePicker from './CategoryImagePicker';
 import { buildShareUrl, sharePageLink } from '../lib/share';
 import { fileToDataUri } from '../lib/medusa/fileToDataUri';
 import { streamRoomAnalyze, streamRoomStage } from '../lib/medusa/roomVisualizerSse';
+import { resolveRoomFileForAi } from '../lib/gemini/roomImageSource';
+import { setCurateBriefForNextStage } from '../lib/gemini/curateStageContext';
+import { selectProductsForCurate } from '../lib/gemini/selectProductsForRoom';
+import { buildRoomStageRequest } from '../lib/roomVisualizer/stageRequest';
+import type { RoomStageMode } from '../lib/roomVisualizer/stageRequest';
+import VisualizerAiActions, {
+  type VisualizerAiAction,
+} from './VisualizerAiActions';
 import {
   hashRoomFile,
   loadCachedRoomAnalysis,
@@ -41,6 +51,7 @@ import { cn } from '../lib/cn';
 import VisualizerLoading3D from './VisualizerLoading3D';
 import CompareSlider from './CompareSlider';
 import VisualizerProductBar from './VisualizerProductBar';
+import MobileVisualizerPicks from './MobileVisualizerPicks';
 import AddToCartButton from './AddToCartButton';
 import CartIconButton from './CartIconButton';
 import RoomSceneFrame from './RoomSceneFrame';
@@ -50,6 +61,7 @@ import type { AIVisualizerStep } from '../types/ai';
 type Step = 'pick' | 'ready' | 'generating' | 'result';
 type AnalysisStatus = 'idle' | 'loading' | 'ready' | 'error';
 type MobileTab = 'products' | 'details';
+type MobileProductsView = 'browse' | 'picks';
 
 const CATALOG_ASPECT_RATIOS = [
   'aspect-[3/4]',
@@ -75,6 +87,8 @@ interface TryInMyRoomViewProps {
   onRemoveProduct: (productId: string) => void;
   onRemovePlacedProduct: (productId: string) => void;
   onPlacedProductsChange: (products: Product[]) => void;
+  /** Replace staged + placed lists (e.g. after AI curation) */
+  onSyncRoomProducts?: (products: Product[]) => void;
   onClose: () => void;
   onAddToCart?: (product: Product) => void;
   onRoomSaved?: () => void;
@@ -120,6 +134,7 @@ export default function TryInMyRoomView({
   onRemoveProduct,
   onRemovePlacedProduct,
   onPlacedProductsChange,
+  onSyncRoomProducts,
   onClose,
   onAddToCart,
   onRoomSaved,
@@ -140,6 +155,8 @@ export default function TryInMyRoomView({
   const [step, setStep] = useState<Step>('pick');
   const [preview, setPreview] = useState<string | null>(null);
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
+  /** Bumps when a new Gemini frame is applied so the <img> remounts reliably */
+  const [resultRevision, setResultRevision] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [shareFeedback, setShareFeedback] = useState<'idle' | 'copied' | 'shared'>('idle');
   const [isComparing, setIsComparing] = useState(false);
@@ -151,12 +168,17 @@ export default function TryInMyRoomView({
   const [stageProgress, setStageProgress] = useState<string | null>(null);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<MobileTab>('products');
+  const [mobileProductsView, setMobileProductsView] = useState<MobileProductsView>('browse');
   const [isSilentUpdating, setIsSilentUpdating] = useState(false);
+  const [aiBusyAction, setAiBusyAction] = useState<VisualizerAiAction | null>(null);
+  /** Mobile-only: bottom panel expanded over the room (≈70% vs default ≈52%). */
+  const [bottomExpanded, setBottomExpanded] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<string | null>(null);
   const roomFileRef = useRef<File | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const stageRequestRef = useRef(0);
   const silentAbortRef = useRef<AbortController | null>(null);
   const silentRequestRef = useRef(0);
   const placedRef = useRef(placedProducts);
@@ -194,6 +216,7 @@ export default function TryInMyRoomView({
     }
     return out;
   }, [placedProducts, products]);
+  const pickCount = productsForPreview.length;
 
   const filteredCatalog = useFilteredCatalog(catalog, selectedCategory);
   const catalogProducts = useMemo(
@@ -268,6 +291,7 @@ export default function TryInMyRoomView({
       roomFileRef.current = file;
       setPreview(url);
       setGeneratedImage(null);
+      setResultRevision(0);
       setError(null);
       setIsComparing(false);
       setStep('ready');
@@ -296,6 +320,7 @@ export default function TryInMyRoomView({
 
   const handleElementSelect = useCallback(
     (element: DetectedRoomElement) => {
+      setBottomExpanded(false);
       setActiveElementId(element.id);
       const stagedIds = new Set(products.map((p) => p.id));
       const suggested = pickBestProductForElement(element, stagedIds, catalog);
@@ -351,10 +376,12 @@ export default function TryInMyRoomView({
       try {
         const roomDataUri = await fileToDataUri(roomFile);
         const staged = await streamRoomStage(
-          {
+          buildRoomStageRequest({
             roomDataUri,
-            productIds: items.map((product) => product.id),
-          },
+            mode: 'compose',
+            products: items,
+            colorSelections,
+          }),
           { signal: controller.signal }
         );
 
@@ -365,6 +392,7 @@ export default function TryInMyRoomView({
         if (currentKey !== expectedKey) return;
 
         setGeneratedImage(staged.imageUrl);
+        setResultRevision((r) => r + 1);
         setStep('result');
         setActiveElementId(null);
       } catch (err) {
@@ -378,8 +406,16 @@ export default function TryInMyRoomView({
         }
       }
     },
-    []
+    [colorSelections]
   );
+
+  const applyGeneratedResult = useCallback((imageUrl: string) => {
+    setGeneratedImage(imageUrl);
+    setResultRevision((r) => r + 1);
+    setStep('result');
+    setIsComparing(false);
+    setActiveElementId(null);
+  }, []);
 
   const handleRemovePlaced = useCallback(
     (productId: string) => {
@@ -393,6 +429,7 @@ export default function TryInMyRoomView({
           silentAbortRef.current?.abort();
           setIsSilentUpdating(false);
           setGeneratedImage(null);
+          setResultRevision(0);
           setStep('ready');
         } else {
           void runSilentVisualization(nextPlaced, nextIds);
@@ -402,9 +439,125 @@ export default function TryInMyRoomView({
     [placedProducts, onRemovePlacedProduct, step, generatedImage, runSilentVisualization]
   );
 
-  const runVisualization = useCallback(async () => {
+  const runRoomStageJob = useCallback(
+    async (options: {
+      mode: RoomStageMode;
+      products: Product[];
+      preferGeneratedFrame?: boolean;
+      initialProgress: string;
+      aiAction?: VisualizerAiAction | null;
+      defaultErrorMessage?: string;
+    }) => {
+      if (!preview && !generatedImage && !roomFileRef.current) return;
+
+      // Cancel any in-flight stage + silent updates, then claim a fresh slot.
+      abortRef.current?.abort();
+      silentAbortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const requestId = ++stageRequestRef.current;
+
+      const stepBeforeRun: Step = generatedImage ? 'result' : 'ready';
+      const isStillCurrent = () =>
+        requestId === stageRequestRef.current && !controller.signal.aborted;
+
+      setError(null);
+      if (options.aiAction) setAiBusyAction(options.aiAction);
+      setStageProgress(options.initialProgress);
+      setStep('generating');
+
+      try {
+        const roomFile = await resolveRoomFileForAi({
+          preview,
+          generatedImage,
+          preferGenerated: options.preferGeneratedFrame ?? false,
+          roomFile: roomFileRef.current,
+        });
+        if (!isStillCurrent()) return;
+
+        const roomDataUri = await fileToDataUri(roomFile);
+        if (!isStillCurrent()) return;
+
+        const staged = await streamRoomStage(
+          buildRoomStageRequest({
+            roomDataUri,
+            mode: options.mode,
+            products: options.products,
+            colorSelections,
+          }),
+          {
+            signal: controller.signal,
+            onProgress: (p) => {
+              if (!isStillCurrent()) return;
+              if (p.message) setStageProgress(p.message);
+            },
+          }
+        );
+
+        if (!isStillCurrent()) return;
+
+        if (!staged?.imageUrl || typeof staged.imageUrl !== 'string') {
+          throw new Error('Gemini returned an empty image. Please try again.');
+        }
+
+        setStageProgress(null);
+        applyGeneratedResult(staged.imageUrl);
+        if (options.products.length > 0) {
+          onPlacedProductsChange(options.products);
+        }
+      } catch (err) {
+        if (
+          controller.signal.aborted ||
+          requestId !== stageRequestRef.current ||
+          (err instanceof DOMException && err.name === 'AbortError')
+        ) {
+          return;
+        }
+        setStageProgress(null);
+        const message =
+          err instanceof Error
+            ? err.message
+            : options.defaultErrorMessage ?? 'Visualization failed. Please try again.';
+        setError(message);
+        setStep(stepBeforeRun);
+      } finally {
+        if (
+          requestId === stageRequestRef.current &&
+          options.aiAction
+        ) {
+          setAiBusyAction(null);
+        }
+      }
+    },
+    [
+      preview,
+      generatedImage,
+      colorSelections,
+      onPlacedProductsChange,
+      applyGeneratedResult,
+    ]
+  );
+
+  const runRearrange = useCallback(async () => {
+    if (!roomFileRef.current && !preview && !generatedImage) return;
+
+    // Rearrange uses the EXACT same pipeline as preview/compose. The Gemini
+    // request shape is identical (text + room image + reference image), only
+    // the prompt differs. Single-image input — no catalog products are sent.
+    // No button spinner: the 3D-cube overlay (triggered by step==='generating')
+    // is the only loading indicator on the room image itself.
+    await runRoomStageJob({
+      mode: 'rearrange',
+      products: [],
+      preferGeneratedFrame: Boolean(generatedImage),
+      initialProgress: 'Rearranging your room…',
+      defaultErrorMessage: 'Could not rearrange your room.',
+    });
+  }, [preview, generatedImage, runRoomStageJob]);
+
+  const runCurate = useCallback(async () => {
     const roomFile = roomFileRef.current;
-    if (!roomFile || productsForPreview.length === 0) return;
+    if (!roomFile || catalog.length === 0) return;
 
     abortRef.current?.abort();
     silentAbortRef.current?.abort();
@@ -412,47 +565,127 @@ export default function TryInMyRoomView({
     abortRef.current = controller;
 
     setError(null);
-    setStageProgress('Preparing images…');
+    setAiBusyAction('curate');
+    setStageProgress('Understanding your room…');
     setStep('generating');
 
     try {
-      const roomDataUri = await fileToDataUri(roomFile);
-      const staged = await streamRoomStage(
-        {
-          roomDataUri,
-          productIds: productsForPreview.map((product) => product.id),
-        },
+      const { products: selected, brief } = await selectProductsForCurate(
+        roomFile,
+        catalog,
         {
           signal: controller.signal,
-          onProgress: (p) => {
-            if (p.message) setStageProgress(p.message);
-          },
+          maxPick: 5,
         }
       );
 
       if (controller.signal.aborted) return;
-      setGeneratedImage(staged.imageUrl);
-      setStageProgress(null);
-      setStep('result');
-      onPlacedProductsChange(productsForPreview);
-      setActiveElementId(null);
+      if (selected.length === 0) {
+        throw new Error('AI could not pick products for this room. Try again.');
+      }
+
+      onSyncRoomProducts?.(selected);
+      if (selected[0]) onActiveProductChange(selected[0].id);
+
+      setCurateBriefForNextStage(brief);
+
+      // Hand off to the unified staging job so curate uses the same proven path
+      // as preview/rearrange. We clear our own controller — runRoomStageJob
+      // installs its own.
+      abortRef.current = null;
+      await runRoomStageJob({
+        mode: 'curate',
+        products: selected,
+        preferGeneratedFrame: false,
+        initialProgress: 'Staging your curated room…',
+        defaultErrorMessage: 'Could not curate your room.',
+      });
     } catch (err) {
-      if (controller.signal.aborted) return;
+      if (
+        controller.signal.aborted ||
+        (err instanceof DOMException && err.name === 'AbortError')
+      ) {
+        return;
+      }
       setStageProgress(null);
       const message =
-        err instanceof Error ? err.message : 'Visualization failed. Please try again.';
+        err instanceof Error ? err.message : 'Could not curate your room.';
       setError(message);
-      setStep('ready');
+      setStep(generatedImage ? 'result' : 'ready');
+    } finally {
+      setAiBusyAction(null);
     }
-  }, [productsForPreview, onPlacedProductsChange]);
+  }, [
+    catalog,
+    generatedImage,
+    onSyncRoomProducts,
+    onActiveProductChange,
+    runRoomStageJob,
+  ]);
+
+  const runVisualization = useCallback(async () => {
+    const roomFile = roomFileRef.current;
+    if (!roomFile || productsForPreview.length === 0) return;
+
+    await runRoomStageJob({
+      mode: 'compose',
+      products: productsForPreview,
+      preferGeneratedFrame: false,
+      initialProgress: 'Preparing images…',
+      defaultErrorMessage: 'Visualization failed. Please try again.',
+    });
+  }, [productsForPreview, runRoomStageJob]);
+
+  // ─── Mobile bottom-panel expand/collapse helpers ─────────────────────────
+  /**
+   * Scroll-driven toggle for the bottom panel:
+   *   • Scroll down to the very bottom of the products list → EXPAND to ~70%.
+   *   • Scroll back up to the very top → COLLAPSE back to ~50%.
+   * This is the only way the user resizes the panel (no buttons).
+   */
+  const handleProductsScroll = useCallback(
+    (e: React.UIEvent<HTMLDivElement>) => {
+      const el = e.currentTarget;
+      const scrollable = el.scrollHeight - el.clientHeight;
+
+      if (!bottomExpanded) {
+        // Trigger expand only when there's something to scroll AND the user
+        // pulled all the way to the bottom.
+        if (scrollable > 40 && el.scrollTop >= scrollable - 4) {
+          setBottomExpanded(true);
+        }
+        return;
+      }
+
+      // Already expanded — if the user scrolls all the way back to the top,
+      // collapse to the standard size.
+      if (el.scrollTop <= 2) {
+        setBottomExpanded(false);
+      }
+    },
+    [bottomExpanded]
+  );
+
+  // Auto-collapse on any room-image-changing action so the user sees the
+  // result after they trigger it.
+  useEffect(() => {
+    if (!bottomExpanded) return;
+    if (step === 'generating' || step === 'result') {
+      setBottomExpanded(false);
+    }
+  }, [bottomExpanded, step]);
 
   const handleCatalogProductTap = useCallback(
     (product: Product) => {
+      // Any product tap on mobile is an action against the room — collapse the
+      // expanded panel so the user can see what they just did.
+      setBottomExpanded(false);
+
       const isPlaced = placedIds.has(product.id);
       const isStaged = stagedIds.has(product.id);
       const isSelected = isPlaced || isStaged;
 
-      if (isSelected && activeProductId === product.id) {
+      if (isSelected) {
         if (isPlaced) {
           handleRemovePlaced(product.id);
         } else {
@@ -461,25 +694,25 @@ export default function TryInMyRoomView({
         return;
       }
 
-      if (isSelected) {
-        onActiveProductChange(product.id);
-        return;
-      }
-
       onStageProduct?.(product);
     },
     [
       placedIds,
       stagedIds,
-      activeProductId,
-      onActiveProductChange,
       onRemoveProduct,
       onStageProduct,
       handleRemovePlaced,
     ]
   );
 
+  useEffect(() => {
+    if (pickCount === 0) {
+      setMobileProductsView('browse');
+    }
+  }, [pickCount]);
+
   const handlePreview = () => {
+    setBottomExpanded(false);
     void runVisualization();
   };
 
@@ -523,6 +756,11 @@ export default function TryInMyRoomView({
     onVisualizerContextChange?.({ step, roomImageUrl });
   }, [step, generatedImage, onVisualizerContextChange]);
 
+  const canAiRearrange = Boolean(
+    step === 'result' && generatedImage ? generatedImage : preview
+  );
+  const canAiCurate = Boolean(roomFileRef.current) && catalog.length > 0;
+
   useEffect(() => {
     onChromeChange?.({
       canShare: Boolean(activeProduct),
@@ -533,6 +771,14 @@ export default function TryInMyRoomView({
       onToggleCompare: () => setIsComparing((v) => !v),
       showChangePhoto: step !== 'generating',
       onChangeRoomPhoto: openRoomPhotoPicker,
+      showAiRoomStudio: step !== 'pick',
+      aiRoomDisabled: step === 'generating',
+      aiRoomBusy: Boolean(aiBusyAction),
+      aiBusyAction,
+      canRearrange: canAiRearrange,
+      canCurate: canAiCurate,
+      onRearrange: () => void runRearrange(),
+      onCurate: () => void runCurate(),
     });
   }, [
     activeProduct,
@@ -544,11 +790,17 @@ export default function TryInMyRoomView({
     isComparing,
     onChromeChange,
     openRoomPhotoPicker,
+    aiBusyAction,
+    canAiRearrange,
+    canAiCurate,
+    runRearrange,
+    runCurate,
   ]);
 
-  const displayImage = step === 'result' && generatedImage ? generatedImage : preview;
+  const showStagedResult = step === 'result' && Boolean(generatedImage);
+  const displayImage = showStagedResult ? generatedImage! : preview;
   const showOriginalWithHotspots =
-    Boolean(preview) && step !== 'generating' && (!generatedImage || step === 'ready');
+    step === 'ready' && !generatedImage && Boolean(preview) && !isComparing;
   const showHotspots =
     showOriginalWithHotspots &&
     !isComparing &&
@@ -561,10 +813,48 @@ export default function TryInMyRoomView({
 
   const canPreview = step === 'ready' && productsForPreview.length > 0;
   const showCompare = step === 'result' && Boolean(preview && generatedImage);
+  const toolbarAiActions =
+    step !== 'pick' ? (
+      <VisualizerAiActions
+        variant="toolbar"
+        disabled={step === 'generating'}
+        busy={Boolean(aiBusyAction)}
+        busyAction={aiBusyAction}
+        canRearrange={canAiRearrange}
+        canCurate={canAiCurate}
+        onRearrange={() => void runRearrange()}
+        onCurate={() => void runCurate()}
+      />
+    ) : null;
 
   // ─── SHARED: room image content ────────────────────────────────────────────
   const roomImageContent = (
     <>
+      {/* Cream "studio" backdrop. Fills the letterbox areas around the
+          object-contain photo so the room is framed by a soft cream wash
+          (matching the desktop sidebar) instead of black bars.
+          When a photo is present we extend it as a heavily-blurred fill
+          beneath the cream tint — same visual trick as cinema-mode video
+          players use for vertical phone clips. */}
+      <div className="pointer-events-none absolute inset-0 z-0 bg-cream" aria-hidden />
+      {displayImage && (
+        <>
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 z-0 bg-cover bg-center"
+            style={{
+              backgroundImage: `url("${displayImage}")`,
+              filter: 'blur(48px) saturate(1.15)',
+              transform: 'scale(1.18)',
+            }}
+          />
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 z-0 bg-cream/55"
+          />
+        </>
+      )}
+
       <AnimatePresence>
         {hasRoomImage && (
           <motion.div
@@ -573,7 +863,13 @@ export default function TryInMyRoomView({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.4 }}
-            className="absolute inset-0 z-0"
+            // Safe insets so the FULL room photo is visible inside the
+            // chrome — i.e. not hidden behind the top toolbar or the
+            // bottom product capsule.
+            //   Mobile: top controls bar + iPhone notch via safe-area;
+            //           bottom edge handled by the sliding sheet, so 0.
+            //   Desktop: ~96 px top toolbar; ~120 px bottom product capsule.
+            className="absolute inset-x-0 top-[max(3.5rem,calc(env(safe-area-inset-top)+3.25rem))] bottom-0 z-0 lg:top-24 lg:bottom-28"
           >
             {isComparing && preview && generatedImage ? (
               <CompareSlider
@@ -593,25 +889,37 @@ export default function TryInMyRoomView({
               />
             ) : (
               <img
+                key={
+                  showStagedResult
+                    ? `staged-${resultRevision}-${(generatedImage ?? '').length}`
+                    : `room-preview-${(preview ?? '').length}`
+                }
                 src={displayImage!}
-                alt={step === 'result' ? 'AI staged room' : 'Your room'}
-                className="h-full w-full object-cover"
+                alt={showStagedResult ? 'AI staged room' : 'Your room'}
+                className="h-full w-full object-contain"
+                draggable={false}
               />
             )}
 
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.3 }}
-              className="pointer-events-none absolute inset-0 bg-gradient-to-b from-ink/35 via-transparent to-ink/20"
-              aria-hidden
-            />
-            {step === 'generating' && (
-              <div className="absolute inset-0 bg-ink/25 backdrop-blur-[2px]" aria-hidden />
-            )}
           </motion.div>
         )}
       </AnimatePresence>
+
+      {step === 'generating' && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-ink/50 backdrop-blur-sm pointer-events-auto">
+          <VisualizerLoading3D
+            overlay
+            label={
+              aiBusyAction === 'rearrange'
+                ? 'Rearranging your room'
+                : aiBusyAction === 'curate'
+                  ? 'Curating your room'
+                  : 'Creating your staged room'
+            }
+            sublabel={stageProgress ?? 'Working with Gemini…'}
+          />
+        </div>
+      )}
     </>
   );
 
@@ -632,8 +940,14 @@ export default function TryInMyRoomView({
           }}
         />
 
-        {/* ── TOP: Room visualizer (fixed, no scroll) ─────────────────── */}
-        <div className="relative min-h-0 flex-[0_0_48%] overflow-hidden">
+        {/* ── TOP: Room visualizer (shrinks when bottom is expanded) ──── */}
+        <motion.div
+          className="relative min-h-0 overflow-hidden"
+          initial={false}
+          animate={{ flexBasis: bottomExpanded ? '30%' : '48%' }}
+          transition={{ duration: 0.42, ease: [0.32, 0.72, 0, 1] }}
+          style={{ flexGrow: 0, flexShrink: 0 }}
+        >
 
           {/* Upload CTA (step = pick) */}
           <AnimatePresence mode="wait">
@@ -674,17 +988,6 @@ export default function TryInMyRoomView({
               </motion.div>
             )}
           </AnimatePresence>
-
-          {/* Loading overlay */}
-          {step === 'generating' && (
-            <div className="absolute inset-0 z-20 flex items-center justify-center">
-              <VisualizerLoading3D
-                overlay
-                label="Creating your staged room"
-                sublabel={stageProgress ?? 'Generating staged room…'}
-              />
-            </div>
-          )}
 
           {/* Scanning / hotspot hint — bottom of room area */}
           {preview && step === 'ready' && (
@@ -743,7 +1046,7 @@ export default function TryInMyRoomView({
 
           {/* Visualization error */}
           {error && step !== 'pick' && (
-            <div className="absolute inset-x-4 bottom-3 z-20">
+            <div className="absolute inset-x-4 bottom-3 z-[55]">
               <div className="glass-dark flex items-start gap-2 rounded-2xl px-4 py-3">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-bronze" />
                 <p className="text-sm text-cream/80">{error}</p>
@@ -798,6 +1101,8 @@ export default function TryInMyRoomView({
                 </button>
               )}
 
+              {toolbarAiActions}
+
               <button
                 type="button"
                 onClick={() => void handleShare()}
@@ -838,10 +1143,24 @@ export default function TryInMyRoomView({
               />
             </div>
           </div>
-        </div>
+        </motion.div>
 
-        {/* ── BOTTOM: Tab panel ────────────────────────────────────────── */}
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-t-[1.5rem] bg-cream shadow-[0_-12px_40px_rgba(0,0,0,0.30)]">
+        {/* ── BOTTOM: Tab panel (expands to ~70% when triggered) ──────── */}
+        <motion.div
+          className="relative flex min-h-0 flex-col overflow-hidden rounded-t-[1.5rem] bg-cream shadow-[0_-12px_40px_rgba(0,0,0,0.30)]"
+          initial={false}
+          animate={{ flexBasis: bottomExpanded ? '70%' : '52%' }}
+          transition={{ duration: 0.42, ease: [0.32, 0.72, 0, 1] }}
+          style={{ flexGrow: 1, flexShrink: 1 }}
+        >
+          {/* Grab handle — visual affordance only; collapsing happens by
+              scrolling the products list back to the top. */}
+          <div
+            aria-hidden
+            className="relative z-20 mx-auto mt-1.5 mb-0.5 flex h-3 w-12 shrink-0 items-center justify-center"
+          >
+            <span className="block h-1 w-10 rounded-full bg-ink/15" />
+          </div>
 
           {/* Tab bar */}
           <div className="shrink-0 px-4 pt-3 pb-1">
@@ -850,7 +1169,10 @@ export default function TryInMyRoomView({
                 <button
                   key={tab}
                   type="button"
-                  onClick={() => setActiveTab(tab)}
+                  onClick={() => {
+                    setActiveTab(tab);
+                    setBottomExpanded(false);
+                  }}
                   className={cn(
                     'flex flex-1 items-center justify-center gap-1.5 rounded-full py-2 text-xs font-semibold capitalize transition-all duration-200 active:scale-[0.98]',
                     activeTab === tab
@@ -859,14 +1181,14 @@ export default function TryInMyRoomView({
                   )}
                 >
                   {tab === 'products' ? 'Products' : 'Details'}
-                  {tab === 'products' && (products.length > 0 || catalogProducts.length > 0) && (
+                  {tab === 'products' && pickCount > 0 && (
                     <span
                       className={cn(
-                        'flex h-4 min-w-4 items-center justify-center rounded-full px-0.5 text-[9px] font-bold',
-                        activeTab === 'products' ? 'bg-cream/20 text-cream' : 'bg-ink/12 text-ink'
+                        'flex h-4 min-w-4 items-center justify-center rounded-full px-0.5 text-[9px] font-bold tabular-nums',
+                        activeTab === 'products' ? 'bg-cream/20 text-cream' : 'bg-bronze/20 text-bronze'
                       )}
                     >
-                      {products.length > 0 ? products.length : catalogProducts.length}
+                      {pickCount}
                     </span>
                   )}
                 </button>
@@ -885,85 +1207,164 @@ export default function TryInMyRoomView({
                 transition={{ duration: 0.18 }}
                 className="flex min-h-0 flex-1 flex-col overflow-hidden"
               >
-                {onCategorySelect && (
-                  <div className="shrink-0 border-b border-ink/6 px-4 py-2.5">
-                    <CategoryImagePicker
-                      selectedCategory={selectedCategory}
-                      onSelectCategory={onCategorySelect}
-                      variant="header"
-                    />
+                {pickCount > 0 && (
+                  <div className="shrink-0 px-4 pb-2">
+                    <div
+                      className="flex rounded-full bg-parchment p-0.5"
+                      role="tablist"
+                      aria-label="Product views"
+                    >
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={mobileProductsView === 'browse'}
+                        onClick={() => setMobileProductsView('browse')}
+                        className={cn(
+                          'flex flex-1 items-center justify-center rounded-full py-2 text-xs font-semibold transition-all active:scale-[0.98]',
+                          mobileProductsView === 'browse'
+                            ? 'bg-cream text-ink shadow-sm'
+                            : 'text-ink-muted'
+                        )}
+                      >
+                        Shop
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={mobileProductsView === 'picks'}
+                        onClick={() => setMobileProductsView('picks')}
+                        className={cn(
+                          'flex flex-1 items-center justify-center gap-1.5 rounded-full py-2 text-xs font-semibold transition-all active:scale-[0.98]',
+                          mobileProductsView === 'picks'
+                            ? 'bg-cream text-ink shadow-sm'
+                            : 'text-ink-muted'
+                        )}
+                      >
+                        Your picks
+                        <span
+                          className={cn(
+                            'flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-bold tabular-nums',
+                            mobileProductsView === 'picks' ? 'bg-ink text-cream' : 'bg-ink/12 text-ink'
+                          )}
+                        >
+                          {pickCount}
+                        </span>
+                      </button>
+                    </div>
                   </div>
                 )}
 
-                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain no-scrollbar px-4 py-3">
-                  <p className="mb-3 text-[10px] font-medium uppercase tracking-[0.18em] text-ink-faint">
-                    {hasPlaced
-                      ? 'In room · tap to add or remove from room'
-                      : 'Tap to stage · tap again to remove'}
-                  </p>
-                  <div className="columns-2 gap-2.5">
-                    {catalogProducts.map(({ product, sceneImage }, index) => {
-                      const isActive = activeProduct?.id === product.id;
-                      const isPlaced = placedIds.has(product.id);
-                      const isStaged = stagedIds.has(product.id);
-                      const heightClass =
-                        CATALOG_ASPECT_RATIOS[index % CATALOG_ASPECT_RATIOS.length];
-                      return (
+                {mobileProductsView === 'picks' ? (
+                  <MobileVisualizerPicks
+                    catalog={catalog}
+                    stagedProducts={products}
+                    placedProducts={placedProducts}
+                    activeProductId={activeProductId}
+                    onFocusProduct={(id) => {
+                      onActiveProductChange(id);
+                      setActiveTab('details');
+                    }}
+                    onOpenDetails={() => setActiveTab('details')}
+                    onRemoveStaged={onRemoveProduct}
+                    onRemovePlaced={handleRemovePlaced}
+                  />
+                ) : (
+                  <>
+                    {onCategorySelect && (
+                      <div className="shrink-0 border-b border-ink/6 px-4 py-2">
+                        <CategoryImagePicker
+                          selectedCategory={selectedCategory}
+                          onSelectCategory={onCategorySelect}
+                          variant="header"
+                        />
+                      </div>
+                    )}
+
+                    <div
+                      className="min-h-0 flex-1 overflow-y-auto overscroll-contain no-scrollbar px-4 py-3"
+                      onScroll={handleProductsScroll}
+                    >
+                      {pickCount > 0 && (
                         <button
-                          key={product.id}
                           type="button"
-                          onClick={() => handleCatalogProductTap(product)}
-                          className="group relative mb-2.5 flex w-full break-inside-avoid flex-col text-left transition-all active:scale-[0.98]"
+                          onClick={() => setMobileProductsView('picks')}
+                          className="mb-3 flex w-full items-center justify-between rounded-xl border border-bronze/25 bg-bronze/8 px-3 py-2.5 text-left active:scale-[0.99]"
                         >
-                          <div
-                            className={cn(
-                              'relative w-full overflow-hidden rounded-2xl bg-parchment/60',
-                              heightClass,
-                              (isPlaced || isStaged) && 'ring-1 ring-ink/20',
-                              isActive &&
-                                (isPlaced || isStaged) &&
-                                'ring-ink/35 shadow-[0_0_0_1px_rgba(28,26,23,0.06)]'
-                            )}
-                          >
-                            <img
-                              src={sceneImage}
-                              alt={product.name}
-                              className="absolute inset-0 h-full w-full object-cover"
-                              loading="lazy"
-                            />
-                            <div className="absolute inset-0 bg-ink/0 transition-colors group-active:bg-ink/10" />
-                            <span
-                              className={cn(
-                                'absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full shadow-sm backdrop-blur-sm',
-                                isPlaced
-                                  ? 'bg-ink text-cream'
-                                  : isStaged
-                                    ? 'bg-bronze text-cream'
-                                    : 'bg-cream/90 text-bronze'
-                              )}
-                            >
-                              {isPlaced ? (
-                                <Home className="h-3.5 w-3.5" strokeWidth={1.75} />
-                              ) : isStaged ? (
-                                <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
-                              ) : (
-                                <Home className="h-3.5 w-3.5" strokeWidth={1.75} />
-                              )}
-                            </span>
-                          </div>
-                          <div className="mt-2 flex items-center justify-between gap-1 px-0.5">
-                            <p className="line-clamp-1 text-[11px] font-medium text-ink">
-                              {product.name}
-                            </p>
-                            <span className="shrink-0 font-display text-[10px] italic text-bronze">
-                              {product.price}
-                            </span>
-                          </div>
+                          <span className="text-xs font-semibold text-ink">
+                            {pickCount} selected for preview
+                          </span>
+                          <span className="text-xs font-semibold text-bronze">View picks →</span>
                         </button>
-                      );
-                    })}
-                  </div>
-                </div>
+                      )}
+                      <p className="mb-3 text-[10px] font-medium uppercase tracking-[0.18em] text-ink-faint">
+                        Tap + to queue · tap again to remove
+                      </p>
+                      <div className="columns-2 gap-2.5">
+                        {catalogProducts.map(({ product, sceneImage }, index) => {
+                          const isActive = activeProduct?.id === product.id;
+                          const isPlaced = placedIds.has(product.id);
+                          const isStaged = stagedIds.has(product.id);
+                          const heightClass =
+                            CATALOG_ASPECT_RATIOS[index % CATALOG_ASPECT_RATIOS.length];
+                          return (
+                            <button
+                              key={product.id}
+                              type="button"
+                              onClick={() => handleCatalogProductTap(product)}
+                              className="group relative mb-2.5 flex w-full break-inside-avoid flex-col text-left transition-all active:scale-[0.98]"
+                            >
+                              <div
+                                className={cn(
+                                  'relative w-full overflow-hidden rounded-2xl bg-parchment/60',
+                                  heightClass,
+                                  (isPlaced || isStaged) && 'ring-1 ring-ink/20',
+                                  isActive &&
+                                    (isPlaced || isStaged) &&
+                                    'ring-ink/35 shadow-[0_0_0_1px_rgba(28,26,23,0.06)]'
+                                )}
+                              >
+                                <img
+                                  src={sceneImage}
+                                  alt={product.name}
+                                  className="absolute inset-0 h-full w-full object-cover"
+                                  loading="lazy"
+                                />
+                                <div className="absolute inset-0 bg-ink/0 transition-colors group-active:bg-ink/10" />
+                                <span
+                                  className={cn(
+                                    'absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full shadow-sm backdrop-blur-sm',
+                                    isPlaced
+                                      ? 'bg-ink text-cream'
+                                      : isStaged
+                                        ? 'bg-bronze text-cream'
+                                        : 'bg-cream/95 text-ink-muted ring-1 ring-ink/10'
+                                  )}
+                                  aria-hidden
+                                >
+                                  {isPlaced ? (
+                                    <Home className="h-3.5 w-3.5" strokeWidth={1.75} />
+                                  ) : isStaged ? (
+                                    <ListChecks className="h-3.5 w-3.5" strokeWidth={2} />
+                                  ) : (
+                                    <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+                                  )}
+                                </span>
+                              </div>
+                              <div className="mt-2 flex items-center justify-between gap-1 px-0.5">
+                                <p className="line-clamp-1 text-[11px] font-medium text-ink">
+                                  {product.name}
+                                </p>
+                                <span className="shrink-0 font-display text-[10px] italic text-bronze">
+                                  {product.price}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </>
+                )}
 
                 <footer
                   className="shrink-0 border-t border-ink/8 bg-cream/95 px-4 py-3 backdrop-blur-md"
@@ -1211,7 +1612,7 @@ export default function TryInMyRoomView({
               </motion.div>
             )}
           </AnimatePresence>
-        </div>
+        </motion.div>
       </div>
     );
   }
@@ -1353,29 +1754,14 @@ export default function TryInMyRoomView({
               </motion.button>
             )}
 
-            {step === 'generating' && (
-              <motion.div
-                key="generating"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="pointer-events-auto w-full max-w-lg px-6"
-              >
-                <VisualizerLoading3D
-                  overlay
-                  label="Creating your staged room"
-                  sublabel={stageProgress ?? 'Generating staged room…'}
-                />
-              </motion.div>
-            )}
           </AnimatePresence>
         </motion.div>
 
-        {error && (step === 'ready' || step === 'result') && preview && (
+        {error && preview && (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            className="pointer-events-none absolute bottom-4 left-1/2 z-20 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 lg:bottom-6"
+            className="pointer-events-none absolute bottom-4 left-1/2 z-[55] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 lg:bottom-6"
           >
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}

@@ -1,4 +1,25 @@
+import { getGeminiApiKey } from '../gemini/apiKey';
+import { clientAnalyzeRoom, clientStageRoom } from '../roomVisualizer/clientFallback';
+import type { RoomStageMode } from '../roomVisualizer/stageRequest';
 import { getMedusaBackendUrl, getMedusaPublishableKey } from './config';
+
+export type { RoomStageMode };
+
+function hasGeminiFallback(): boolean {
+  try {
+    getGeminiApiKey();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function missingPublishableKeyError(): Error {
+  const hint = import.meta.env.DEV
+    ? 'Add VITE_MEDUSA_PUBLISHABLE_KEY to .env in the project root (from your Medusa backend: npm run publishable-key), then restart Vite. Or keep VITE_GEMINI_API_KEY set to use direct Gemini staging without Medusa.'
+    : 'Set VITE_MEDUSA_PUBLISHABLE_KEY in your environment.';
+  return new Error(`Medusa publishable API key is missing. ${hint}`);
+}
 
 export type SseProgress = {
   phase?: string;
@@ -26,11 +47,7 @@ async function consumeSsePost<TComplete>(
   };
   const publishableKey = getMedusaPublishableKey();
   if (!publishableKey) {
-    const hint =
-      import.meta.env.DEV && !import.meta.env.VITE_MEDUSA_BACKEND_URL
-        ? 'Add VITE_MEDUSA_PUBLISHABLE_KEY to apps/AH-Marketplace/.env.local (npm run publishable-key in apps/backend), then restart Vite.'
-        : 'Set VITE_MEDUSA_PUBLISHABLE_KEY in your environment.';
-    throw new Error(`Medusa publishable API key is missing. ${hint}`);
+    throw missingPublishableKeyError();
   }
   headers['x-publishable-api-key'] = publishableKey;
 
@@ -155,7 +172,8 @@ export async function streamRoomStage(
     productIds?: string[];
     productImageUrls?: string[];
     productTitles?: string[];
-    mode?: 'compose' | 'remove';
+    productDescriptions?: string[];
+    mode?: RoomStageMode;
     removeProductTitle?: string;
   },
   options: {
@@ -163,6 +181,17 @@ export async function streamRoomStage(
     signal?: AbortSignal;
   }
 ): Promise<StageComplete> {
+  const mode = body.mode ?? 'compose';
+  const useClient =
+    !getMedusaPublishableKey() ||
+    mode === 'rearrange' ||
+    mode === 'curate';
+
+  if (useClient) {
+    if (!hasGeminiFallback()) throw missingPublishableKeyError();
+    return clientStageRoom(body, options);
+  }
+
   return consumeSsePost<StageComplete>(
     '/store/room-visualizer/stage',
     body,
@@ -181,6 +210,11 @@ export async function streamRoomAnalyze(
     signal?: AbortSignal;
   }
 ): Promise<AnalyzeComplete['analysis']> {
+  if (!getMedusaPublishableKey()) {
+    if (!hasGeminiFallback()) throw missingPublishableKeyError();
+    return clientAnalyzeRoom(roomDataUri, options);
+  }
+
   const result = await consumeSsePost<AnalyzeComplete>(
     '/store/room-visualizer/analyze',
     { roomDataUri },

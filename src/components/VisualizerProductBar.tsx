@@ -107,7 +107,9 @@ export default function VisualizerProductBar({
         transition={{ type: 'spring', stiffness: 320, damping: 30 }}
         className={cn(
           'glass mx-3 mb-[max(0.4rem,env(safe-area-inset-bottom))] isolate overflow-hidden rounded-2xl',
-          'shadow-[0_8px_32px_rgba(0,0,0,0.2)]',
+          // Cream wash on top of the glass blur so text stays high-contrast
+          // against any room photo behind it.
+          'bg-cream/70 ring-1 ring-ink/8 shadow-[0_8px_32px_rgba(0,0,0,0.28)]',
           'lg:mx-0 lg:mb-0'
         )}
       >
@@ -120,8 +122,8 @@ export default function VisualizerProductBar({
               exit={{ opacity: 0 }}
               className="flex items-center gap-3 px-3.5 py-2.5"
             >
-              <MousePointerClick className="h-3.5 w-3.5 shrink-0 text-bronze" strokeWidth={1.75} />
-              <p className="min-w-0 flex-1 text-xs text-ink-muted">
+              <MousePointerClick className="h-4 w-4 shrink-0 text-bronze" strokeWidth={2} />
+              <p className="min-w-0 flex-1 text-[13px] font-medium text-ink">
                 Pick a product to stage · use the top bar to change your room
               </p>
             </motion.div>
@@ -134,18 +136,18 @@ export default function VisualizerProductBar({
               className="flex flex-col"
             >
               {hasPlaced && (
-                <div className="flex items-center gap-2 border-b border-white/30 px-3 py-2 sm:px-3.5">
-                  <div className="flex shrink-0 items-center gap-1">
-                    <Home className="h-3 w-3 text-ink-faint" strokeWidth={1.75} />
-                    <span className="text-[9px] font-semibold uppercase tracking-[0.14em] text-ink-faint">
+                <div className="flex items-center gap-2 border-b border-white/40 bg-cream/45 px-3 py-2 sm:px-3.5">
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <Home className="h-3.5 w-3.5 text-ink-muted" strokeWidth={2} />
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-muted">
                       In room
                     </span>
-                    <span className="rounded-full bg-white/50 px-1.5 py-px text-[9px] font-bold tabular-nums text-ink">
+                    <span className="rounded-full bg-ink/85 px-1.5 py-[1px] text-[10px] font-bold tabular-nums text-cream">
                       {placedProducts.length}
                     </span>
                   </div>
                   {isSilentUpdating && (
-                    <span className="text-[9px] font-medium text-ink-faint">Updating…</span>
+                    <span className="text-[10px] font-semibold text-ink-muted">Updating…</span>
                   )}
                   <LayoutGroup>
                     <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto no-scrollbar">
@@ -231,7 +233,7 @@ export default function VisualizerProductBar({
 
                   <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 items-center gap-2">
-                      <p className="min-w-0 flex-1 truncate text-xs leading-snug text-ink-muted">
+                      <p className="min-w-0 flex-1 truncate text-sm font-semibold leading-snug text-ink">
                         {activeProduct.name}
                       </p>
                       {activeProduct.variants && activeProduct.variants.length > 0 && (
@@ -261,7 +263,7 @@ export default function VisualizerProductBar({
                         </div>
                       )}
                     </div>
-                    <p className="mt-0.5 font-display text-[1.35rem] font-medium leading-none text-bronze">
+                    <p className="mt-1 font-display text-[1.35rem] font-semibold leading-none text-bronze drop-shadow-[0_1px_1px_rgba(255,255,255,0.4)]">
                       {activeProduct.price}
                     </p>
                   </div>
@@ -276,7 +278,7 @@ export default function VisualizerProductBar({
                       >
                         <ChevronLeft className="h-3.5 w-3.5" strokeWidth={2} />
                       </button>
-                      <span className="w-7 text-center text-[10px] font-medium tabular-nums text-ink-faint">
+                      <span className="w-7 text-center text-xs font-semibold tabular-nums text-ink-muted">
                         {activeIndex + 1}/{navigableProducts.length}
                       </span>
                       <button

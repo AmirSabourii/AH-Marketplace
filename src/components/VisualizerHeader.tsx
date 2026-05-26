@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import AskAiToolbarButton from './AskAiToolbarButton';
 import CartIconButton from './CartIconButton';
+import VisualizerAiActions from './VisualizerAiActions';
 import { cn } from '../lib/cn';
 import type { VisualizerChromeState } from './visualizerChrome';
 
@@ -44,6 +45,14 @@ export default function VisualizerHeader({
     onToggleCompare = () => {},
     showChangePhoto = false,
     onChangeRoomPhoto = () => {},
+    showAiRoomStudio = false,
+    aiRoomDisabled = true,
+    aiRoomBusy = false,
+    aiBusyAction = null,
+    canRearrange = false,
+    canCurate = false,
+    onRearrange = () => {},
+    onCurate = () => {},
   } = chrome ?? {};
 
   return (
@@ -105,6 +114,22 @@ export default function VisualizerHeader({
             >
               <SlidersHorizontal className="h-4 w-4" strokeWidth={1.75} />
             </button>
+            <HeaderDivider />
+          </>
+        )}
+
+        {showAiRoomStudio && (
+          <>
+            <VisualizerAiActions
+              variant="toolbar"
+              disabled={aiRoomDisabled}
+              busy={aiRoomBusy}
+              busyAction={aiBusyAction}
+              canRearrange={canRearrange}
+              canCurate={canCurate}
+              onRearrange={onRearrange}
+              onCurate={onCurate}
+            />
             <HeaderDivider />
           </>
         )}

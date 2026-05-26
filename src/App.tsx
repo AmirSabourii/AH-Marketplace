@@ -47,6 +47,27 @@ function App() {
     deepLink.categoryId ?? firstCategory
   );
   const [tryInRoomOpen, setTryInRoomOpen] = useState(false);
+  // Tracks viewport so we only ever mount ONE TryInMyRoomView (desktop OR
+  // mobile). Rendering both at the same time gave them separate internal
+  // state (preview, generatedImage, roomFileRef…) while both fought to
+  // register handlers on the shared App refs — the second-registered
+  // (mobile, hidden via CSS on desktop) won, which broke compare /
+  // rearrange / change-photo when the desktop user clicked them in the
+  // top toolbar.
+  const [isDesktopViewport, setIsDesktopViewport] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    return window.matchMedia('(min-width: 1024px)').matches;
+  });
+  useEffect(() => {
+    const mql = window.matchMedia('(min-width: 1024px)');
+    const onChange = (e: MediaQueryListEvent) => setIsDesktopViewport(e.matches);
+    if (mql.addEventListener) mql.addEventListener('change', onChange);
+    else mql.addListener(onChange);
+    return () => {
+      if (mql.removeEventListener) mql.removeEventListener('change', onChange);
+      else mql.removeListener(onChange);
+    };
+  }, []);
   const [stagedProducts, setStagedProducts] = useState<Product[]>([]);
   const [placedProducts, setPlacedProducts] = useState<Product[]>([]);
   const [activeStagedProductId, setActiveStagedProductId] = useState<string | null>(null);
@@ -75,10 +96,18 @@ function App() {
     showCompare: false,
     isComparing: false,
     showChangePhoto: false,
+    showAiRoomStudio: false,
+    aiRoomDisabled: true,
+    aiRoomBusy: false,
+    aiBusyAction: null as VisualizerChromeState['aiBusyAction'],
+    canRearrange: false,
+    canCurate: false,
   });
   const visualizerChromeHandlers = useRef({
     onShare: defaultVisualizerChrome.onShare,
     onToggleCompare: defaultVisualizerChrome.onToggleCompare,
+    onRearrange: defaultVisualizerChrome.onRearrange!,
+    onCurate: defaultVisualizerChrome.onCurate!,
   });
   const roomPhotoPickerRef = useRef<(() => void) | null>(null);
   const removePlacedFromRoomRef = useRef<((productId: string) => void) | null>(null);
@@ -98,6 +127,8 @@ function App() {
     visualizerChromeHandlers.current = {
       onShare: chrome.onShare,
       onToggleCompare: chrome.onToggleCompare,
+      onRearrange: chrome.onRearrange ?? (() => {}),
+      onCurate: chrome.onCurate ?? (() => {}),
     };
     setVisualizerChromeMeta((prev) => {
       if (
@@ -105,7 +136,13 @@ function App() {
         prev.shareFeedback === chrome.shareFeedback &&
         prev.showCompare === chrome.showCompare &&
         prev.isComparing === chrome.isComparing &&
-        prev.showChangePhoto === chrome.showChangePhoto
+        prev.showChangePhoto === chrome.showChangePhoto &&
+        prev.showAiRoomStudio === chrome.showAiRoomStudio &&
+        prev.aiRoomDisabled === chrome.aiRoomDisabled &&
+        prev.aiRoomBusy === chrome.aiRoomBusy &&
+        prev.aiBusyAction === chrome.aiBusyAction &&
+        prev.canRearrange === chrome.canRearrange &&
+        prev.canCurate === chrome.canCurate
       ) {
         return prev;
       }
@@ -115,6 +152,12 @@ function App() {
         showCompare: chrome.showCompare,
         isComparing: chrome.isComparing,
         showChangePhoto: chrome.showChangePhoto,
+        showAiRoomStudio: chrome.showAiRoomStudio ?? false,
+        aiRoomDisabled: chrome.aiRoomDisabled ?? true,
+        aiRoomBusy: chrome.aiRoomBusy ?? false,
+        aiBusyAction: chrome.aiBusyAction ?? null,
+        canRearrange: chrome.canRearrange ?? false,
+        canCurate: chrome.canCurate ?? false,
       };
     });
   }, []);
@@ -124,6 +167,8 @@ function App() {
     onShare: () => visualizerChromeHandlers.current.onShare(),
     onToggleCompare: () => visualizerChromeHandlers.current.onToggleCompare(),
     onChangeRoomPhoto: () => roomPhotoPickerRef.current?.(),
+    onRearrange: () => visualizerChromeHandlers.current.onRearrange(),
+    onCurate: () => visualizerChromeHandlers.current.onCurate(),
   };
 
   const refreshSavedRoomFlag = useCallback(() => {
@@ -206,6 +251,12 @@ function App() {
       showCompare: false,
       isComparing: false,
       showChangePhoto: false,
+      showAiRoomStudio: false,
+      aiRoomDisabled: true,
+      aiRoomBusy: false,
+      aiBusyAction: null,
+      canRearrange: false,
+      canCurate: false,
     });
   }, []);
 
@@ -270,6 +321,12 @@ function App() {
     setStagedProducts([]);
   }, []);
 
+  const handleSyncRoomProducts = useCallback((products: Product[]) => {
+    setStagedProducts(products);
+    setPlacedProducts(products);
+    setActiveStagedProductId(products[0]?.id ?? null);
+  }, []);
+
   const handleSidebarProductTap = useCallback(
     (product: Product) => {
       if (!tryInRoomOpen) {
@@ -281,18 +338,13 @@ function App() {
       const isStaged = stagedProducts.some((p) => p.id === product.id);
       const isSelected = isPlaced || isStaged;
 
-      if (isSelected && activeStagedProductId === product.id) {
+      if (isSelected) {
         if (isPlaced) {
           removePlacedFromRoomRef.current?.(product.id) ??
             handleRemovePlacedProduct(product.id);
         } else {
           handleRemoveStagedProduct(product.id);
         }
-        return;
-      }
-
-      if (isSelected) {
-        setActiveStagedProductId(product.id);
         return;
       }
 
@@ -583,17 +635,30 @@ function App() {
             stagedProducts={tryInRoomOpen ? stagedProducts : undefined}
             placedProducts={tryInRoomOpen ? placedProducts : undefined}
             activeStagedProductId={tryInRoomOpen ? activeStagedProductId : undefined}
+            onFocusStagedProduct={
+              tryInRoomOpen ? setActiveStagedProductId : undefined
+            }
+            onRemoveStagedProduct={
+              tryInRoomOpen ? handleRemoveStagedProduct : undefined
+            }
+            onRemovePlacedProduct={
+              tryInRoomOpen
+                ? (id) =>
+                    removePlacedFromRoomRef.current?.(id) ??
+                    handleRemovePlacedProduct(id)
+                : undefined
+            }
           />
         </motion.main>
 
         <AnimatePresence>
-          {tryInRoomOpen && (
+          {tryInRoomOpen && isDesktopViewport && (
             <motion.div
               initial={{ width: 0, opacity: 0 }}
               animate={{ width: '100%', opacity: 1 }}
               exit={{ width: 0, opacity: 0 }}
               transition={{ duration: 0.7, ease: [0.32, 0.72, 0, 1] }}
-              className="relative hidden h-screen min-h-0 flex-1 overflow-hidden bg-ink lg:block"
+              className="relative h-screen min-h-0 flex-1 overflow-hidden bg-ink"
             >
               <VisualizerHeader
                 cartCount={cartCount}
@@ -616,6 +681,7 @@ function App() {
                 onRemoveProduct={handleRemoveStagedProduct}
                 onRemovePlacedProduct={handleRemovePlacedProduct}
                 onPlacedProductsChange={handlePlacedProductsChange}
+                onSyncRoomProducts={handleSyncRoomProducts}
                 registerRemovePlacedFromRoom={registerRemovePlacedFromRoom}
                 onClose={closeVisualizer}
                 onRoomSaved={refreshSavedRoomFlag}
@@ -685,8 +751,8 @@ function App() {
         onLogout={() => setUser(null)}
       />
 
-      {tryInRoomOpen && (
-        <div className="fixed inset-0 z-50 flex h-[100dvh] w-full flex-col overflow-hidden bg-ink lg:hidden">
+      {tryInRoomOpen && !isDesktopViewport && (
+        <div className="fixed inset-0 z-50 flex h-[100dvh] w-full flex-col overflow-hidden bg-ink">
           <TryInMyRoomView
             variant="mobile"
             catalog={catalog}
@@ -699,6 +765,7 @@ function App() {
               onRemoveProduct={handleRemoveStagedProduct}
               onRemovePlacedProduct={handleRemovePlacedProduct}
               onPlacedProductsChange={handlePlacedProductsChange}
+              onSyncRoomProducts={handleSyncRoomProducts}
               registerRemovePlacedFromRoom={registerRemovePlacedFromRoom}
               onClose={closeVisualizer}
               onRoomSaved={refreshSavedRoomFlag}

@@ -78,7 +78,7 @@ export default function CompareSlider({
       <img
         src={originalImage}
         alt="Original room"
-        className="absolute inset-0 w-full h-full object-cover"
+        className="absolute inset-0 w-full h-full object-contain"
         draggable={false}
       />
 
@@ -90,7 +90,7 @@ export default function CompareSlider({
         <img
           src={generatedImage}
           alt="AI staged room"
-          className="absolute inset-0 w-full h-full object-cover"
+          className="absolute inset-0 w-full h-full object-contain"
           draggable={false}
         />
       </div>

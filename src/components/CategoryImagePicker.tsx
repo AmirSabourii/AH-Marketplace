@@ -55,7 +55,8 @@ export default function CategoryImagePicker({
   return (
     <div
       className={cn(
-        'mx-auto grid w-full grid-cols-4 gap-2.5 sm:grid-cols-7 sm:gap-3',
+        'mx-auto flex w-full snap-x snap-mandatory scroll-px-4 gap-3 overflow-x-auto overscroll-x-contain px-4 pb-1 no-scrollbar max-md:-mx-4 max-md:scroll-px-6 max-md:px-6',
+        'md:mx-auto md:grid md:grid-cols-7 md:gap-3.5 md:overflow-visible md:px-0 md:snap-none lg:gap-4',
         className
       )}
       role="list"
@@ -75,34 +76,36 @@ export default function CategoryImagePicker({
             transition={{ duration: 0.35, delay: index * 0.05 }}
             onClick={() => onSelectCategory(cat.id)}
             className={cn(
-              'group flex w-full flex-col items-center gap-2 rounded-xl p-2 transition-all duration-200 sm:gap-2.5 sm:p-2.5',
+              'group flex w-[6.75rem] shrink-0 snap-center flex-col items-center justify-between gap-2 overflow-hidden rounded-2xl border bg-cream p-2.5 transition-all duration-200 sm:w-[7.5rem] sm:gap-2.5 sm:rounded-2xl sm:p-3 md:w-full md:min-w-0 md:max-w-[9.5rem] md:justify-self-center',
               isSelected
-                ? 'bg-cream shadow-[0_4px_20px_rgba(28,26,23,0.08)] ring-1 ring-bronze/25'
-                : 'bg-parchment/40 hover:bg-cream/60'
+                ? 'border-bronze/50 shadow-[0_6px_22px_rgba(28,26,23,0.14)] ring-1 ring-bronze/20'
+                : 'border-ink/10 shadow-[0_3px_14px_rgba(28,26,23,0.08)] hover:border-ink/18'
             )}
           >
-            <div className="relative flex h-[68px] w-full items-center justify-center overflow-hidden rounded-xl bg-gradient-to-b from-parchment/80 to-cream/40 sm:h-[76px]">
+            <div className="relative flex h-[7.75rem] w-full items-center justify-center overflow-hidden rounded-xl bg-cream sm:h-[9.25rem] md:h-[10.75rem]">
               {cat.image ? (
-                <img
-                  src={cat.image}
-                  alt=""
-                  className="h-[122%] w-[122%] max-w-none object-contain opacity-90 mix-blend-multiply transition-transform duration-300 group-hover:scale-105"
-                  loading="lazy"
-                />
+                <div className="flex h-full w-full items-center justify-center transition-transform duration-300 group-hover:scale-[1.06]">
+                  <img
+                    src={cat.image}
+                    alt=""
+                    className="h-[118%] w-[118%] max-h-none max-w-none object-contain object-center"
+                    loading="lazy"
+                  />
+                </div>
               ) : (
                 <Icon
                   className={cn(
-                    'h-8 w-8 transition-colors sm:h-9 sm:w-9',
-                    isSelected ? 'text-bronze' : 'text-ink-muted/50 group-hover:text-ink-muted'
+                    'h-14 w-14 transition-colors sm:h-16 sm:w-16 md:h-[4.5rem] md:w-[4.5rem]',
+                    isSelected ? 'text-bronze' : 'text-ink group-hover:text-ink'
                   )}
-                  strokeWidth={1.5}
+                  strokeWidth={1.85}
                 />
               )}
             </div>
             <span
               className={cn(
-                'text-[11px] font-semibold tracking-wide sm:text-xs',
-                isSelected ? 'text-bronze' : 'text-ink-muted group-hover:text-ink'
+                'w-full pb-0.5 text-center text-sm font-semibold leading-tight tracking-wide sm:text-[15px]',
+                isSelected ? 'text-bronze' : 'text-ink'
               )}
             >
               {cat.label}

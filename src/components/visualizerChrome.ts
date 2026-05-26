@@ -1,3 +1,5 @@
+import type { VisualizerAiAction } from './VisualizerAiActions';
+
 export type ShareFeedback = 'idle' | 'copied' | 'shared';
 
 export interface VisualizerChromeState {
@@ -9,6 +11,14 @@ export interface VisualizerChromeState {
   onToggleCompare: () => void;
   showChangePhoto: boolean;
   onChangeRoomPhoto: () => void;
+  showAiRoomStudio?: boolean;
+  aiRoomDisabled?: boolean;
+  aiRoomBusy?: boolean;
+  aiBusyAction?: VisualizerAiAction | null;
+  canRearrange?: boolean;
+  canCurate?: boolean;
+  onRearrange?: () => void;
+  onCurate?: () => void;
 }
 
 export const defaultVisualizerChrome: VisualizerChromeState = {
@@ -20,4 +30,12 @@ export const defaultVisualizerChrome: VisualizerChromeState = {
   onToggleCompare: () => {},
   showChangePhoto: false,
   onChangeRoomPhoto: () => {},
+  showAiRoomStudio: false,
+  aiRoomDisabled: true,
+  aiRoomBusy: false,
+  aiBusyAction: null,
+  canRearrange: false,
+  canCurate: false,
+  onRearrange: () => {},
+  onCurate: () => {},
 };
