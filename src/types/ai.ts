@@ -1,5 +1,6 @@
 import type { CategoryId } from '../data/categories';
 import type { Product } from '../data/scenes';
+import type { CatalogItem } from '../lib/medusa/products';
 
 export type AISurface = 'home' | 'product' | 'visualizer';
 
@@ -13,6 +14,8 @@ export interface AIContext {
   visualizerStep?: AIVisualizerStep;
   /** Latest staged room image (AI composite) or room preview for the visualizer */
   roomImageUrl?: string | null;
+  /** Live Medusa catalog — used for AI product resolution and prompts */
+  catalog?: CatalogItem[];
 }
 
 export function buildAIContextLabel(ctx: AIContext): string {

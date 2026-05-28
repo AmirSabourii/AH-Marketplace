@@ -6,7 +6,6 @@ import {
   Share2,
   SlidersHorizontal,
 } from 'lucide-react';
-import AskAiToolbarButton from './AskAiToolbarButton';
 import CartIconButton from './CartIconButton';
 import VisualizerAiActions from './VisualizerAiActions';
 import { cn } from '../lib/cn';
@@ -22,7 +21,6 @@ interface VisualizerHeaderProps {
   stagedCount?: number;
   onBackToShop?: () => void;
   onCartClick?: () => void;
-  onOpenAI?: () => void;
   chrome?: VisualizerChromeState;
 }
 
@@ -33,7 +31,6 @@ export default function VisualizerHeader({
   stagedCount = 0,
   onBackToShop,
   onCartClick,
-  onOpenAI,
   chrome,
 }: VisualizerHeaderProps) {
   const {
@@ -161,13 +158,6 @@ export default function VisualizerHeader({
         </button>
 
         <HeaderDivider />
-
-        {onOpenAI && (
-          <>
-            <AskAiToolbarButton onClick={onOpenAI} variant="dark" />
-            <HeaderDivider />
-          </>
-        )}
 
         <CartIconButton
           cartCount={cartCount}

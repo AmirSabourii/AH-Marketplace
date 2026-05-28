@@ -73,6 +73,7 @@ function App() {
   const [activeStagedProductId, setActiveStagedProductId] = useState<string | null>(null);
   const [hasSavedRoom, setHasSavedRoom] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
+  const [visualizerSidebarAi, setVisualizerSidebarAi] = useState(false);
   const [aiInitialQuery, setAiInitialQuery] = useState('');
   const [aiContextProduct, setAiContextProduct] = useState<Product | null>(null);
   const [visualizerRoomImageUrl, setVisualizerRoomImageUrl] = useState<string | null>(
@@ -240,6 +241,7 @@ function App() {
   const closeVisualizer = useCallback(() => {
     roomPhotoPickerRef.current = null;
     setTryInRoomOpen(false);
+    setVisualizerSidebarAi(false);
     setStagedProducts([]);
     setPlacedProducts([]);
     setActiveStagedProductId(null);
@@ -533,6 +535,7 @@ function App() {
       stagedProducts: tryInRoomOpen ? roomProducts : undefined,
       visualizerStep: tryInRoomOpen ? visualizerStep : undefined,
       roomImageUrl: tryInRoomOpen ? visualizerRoomImageUrl : undefined,
+      catalog,
     };
   }, [
     aiContextProduct,
@@ -544,6 +547,7 @@ function App() {
     tryInRoomOpen,
     visualizerStep,
     visualizerRoomImageUrl,
+    catalog,
   ]);
 
   const showAiCollapsed =
@@ -560,10 +564,18 @@ function App() {
       setAiInitialQuery(opts?.query?.trim() ?? '');
       setActiveProduct(null);
       setCartOpen(false);
+      if (tryInRoomOpen) {
+        setVisualizerSidebarAi(true);
+        return;
+      }
       setAiOpen(true);
     },
-    []
+    [tryInRoomOpen]
   );
+
+  const handleCloseVisualizerSidebarAi = useCallback(() => {
+    setVisualizerSidebarAi(false);
+  }, []);
 
   const handleBackToShop = useCallback(() => {
     closeVisualizer();
@@ -635,19 +647,17 @@ function App() {
             stagedProducts={tryInRoomOpen ? stagedProducts : undefined}
             placedProducts={tryInRoomOpen ? placedProducts : undefined}
             activeStagedProductId={tryInRoomOpen ? activeStagedProductId : undefined}
-            onFocusStagedProduct={
-              tryInRoomOpen ? setActiveStagedProductId : undefined
-            }
-            onRemoveStagedProduct={
-              tryInRoomOpen ? handleRemoveStagedProduct : undefined
-            }
-            onRemovePlacedProduct={
-              tryInRoomOpen
-                ? (id) =>
-                    removePlacedFromRoomRef.current?.(id) ??
-                    handleRemovePlacedProduct(id)
-                : undefined
-            }
+            sidebarAiOpen={tryInRoomOpen && visualizerSidebarAi}
+            aiContext={tryInRoomOpen ? aiContext : undefined}
+            aiInitialQuery={aiInitialQuery}
+            onClearAiInitialQuery={() => setAiInitialQuery('')}
+            onOpenSidebarAI={() => handleOpenAI()}
+            onCloseSidebarAI={handleCloseVisualizerSidebarAi}
+            onAddToCart={(product) => handleAddToCart(product)}
+            onProductClickFromAi={(product) => {
+              handleCloseVisualizerSidebarAi();
+              handleSidebarProductTap(product);
+            }}
           />
         </motion.main>
 
@@ -666,7 +676,6 @@ function App() {
                 stagedCount={stagedCount}
                 onBackToShop={handleBackToShop}
                 onCartClick={openCart}
-                onOpenAI={() => handleOpenAI()}
                 chrome={visualizerChrome}
               />
               <TryInMyRoomView
@@ -698,7 +707,7 @@ function App() {
       </div>
 
       <AIAssistantShell
-        open={aiOpen}
+        open={aiOpen && !tryInRoomOpen}
         onOpenChange={setAiOpen}
         context={aiContext}
         initialQuery={aiInitialQuery}
@@ -779,8 +788,14 @@ function App() {
               selectedCategory={selectedCategory}
               onCategorySelect={handleCategorySelect}
               onStageProduct={handleStageProduct}
-            onOpenAI={(product) => handleOpenAI({ product: product ?? null })}
-            onVisualizerContextChange={handleVisualizerContextChange}
+              onOpenAI={(product) => handleOpenAI({ product: product ?? null })}
+              sidebarAiOpen={visualizerSidebarAi}
+              aiContext={aiContext}
+              aiInitialQuery={aiInitialQuery}
+              onClearAiInitialQuery={() => setAiInitialQuery('')}
+              onOpenSidebarAI={() => handleOpenAI()}
+              onCloseSidebarAI={handleCloseVisualizerSidebarAi}
+              onVisualizerContextChange={handleVisualizerContextChange}
           />
         </div>
       )}

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Check, ShoppingBag } from 'lucide-react';
 import { cn } from '../lib/cn';
@@ -6,11 +6,14 @@ import { cn } from '../lib/cn';
 type AddToCartVariant = 'pill' | 'icon' | 'full';
 
 interface AddToCartButtonProps {
-  onClick: () => void;
+  /** Return false to skip the success animation (e.g. when opening a menu). */
+  onClick: () => void | false;
   variant?: AddToCartVariant;
   className?: string;
   label?: string;
   disabled?: boolean;
+  /** Increment to play the success animation after an external confirm step. */
+  successSignal?: number;
 }
 
 export default function AddToCartButton({
@@ -19,12 +22,20 @@ export default function AddToCartButton({
   className,
   label = 'Add',
   disabled = false,
+  successSignal = 0,
 }: AddToCartButtonProps) {
   const [justAdded, setJustAdded] = useState(false);
 
+  useEffect(() => {
+    if (!successSignal) return;
+    setJustAdded(true);
+    const t = window.setTimeout(() => setJustAdded(false), 1400);
+    return () => window.clearTimeout(t);
+  }, [successSignal]);
+
   const handleClick = useCallback(() => {
     if (disabled || justAdded) return;
-    onClick();
+    if (onClick() === false) return;
     setJustAdded(true);
     window.setTimeout(() => setJustAdded(false), 1400);
   }, [disabled, justAdded, onClick]);

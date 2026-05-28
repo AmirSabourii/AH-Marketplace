@@ -2,6 +2,8 @@ import type { Product } from '../../data/scenes';
 import type { CatalogItem } from '../medusa/products';
 import { getGeminiApiKey } from './apiKey';
 import { fileToInlineImage, type InlineImagePayload } from './imageUtils';
+import type { CurateIntent } from './curateIntent';
+import { formatCurateIntentForPrompt } from './curateIntent';
 import {
   analyzeRoomForCurate,
   formatRoomBriefForStaging,
@@ -67,9 +69,11 @@ function parseProductIds(text: string): string[] {
 function buildPickPrompt(
   catalog: CatalogItem[],
   brief: RoomCurateBrief,
-  maxPick: number
+  maxPick: number,
+  userIntent?: CurateIntent
 ): string {
   const briefBlock = formatRoomBriefForStaging(brief);
+  const customerBlock = formatCurateIntentForPrompt(userIntent ?? { wish: '' });
 
   return `You are a senior interior stylist at a premium furniture retailer. Your job is to choose catalog products that will be photorealistically staged into the customer's real room.
 
@@ -79,7 +83,7 @@ INPUT
 - CATALOG: products allowed for this room (already filtered to relevant categories).
 
 ${briefBlock}
-
+${customerBlock ? `\n${customerBlock}\n` : ''}
 SELECTION RULES
 1. Read Image 1 and confirm the brief still fits; adjust mentally if the photo contradicts anything.
 2. Pick ${maxPick} products maximum (aim for 3–5) that TOGETHER complete the room:
@@ -92,6 +96,7 @@ SELECTION RULES
 3. Cohesion: all picks must look like one designer curated them — shared wood tone, metal finish, or upholstery family.
 4. Bold but believable: an empty corner is worse than one strong accent. Prefer fewer perfect pieces over many mediocre ones.
 5. Use ONLY product ids from the catalog list.
+${customerBlock ? '6. If CUSTOMER WISH names a household need or product (bunk bed, desk, sectional, storage, kids room), prioritize catalog items that satisfy it — adjust categories mentally if the brief categories are too narrow.' : ''}
 
 OUTPUT
 Return ONLY a JSON array of product id strings, best-fit first. Between 1 and ${maxPick} ids.
@@ -189,20 +194,27 @@ function resolvePickedProducts(
 export async function selectProductsForCurate(
   roomFile: File,
   catalog: CatalogItem[],
-  options?: { signal?: AbortSignal; maxPick?: number }
+  options?: {
+    signal?: AbortSignal;
+    maxPick?: number;
+    userIntent?: CurateIntent;
+  }
 ): Promise<CurateSelectionResult> {
   if (catalog.length === 0) {
     throw new Error('Catalog is empty');
   }
 
   const maxPick = Math.min(options?.maxPick ?? 5, catalog.length);
-  const brief = await analyzeRoomForCurate(roomFile, { signal: options?.signal });
+  const brief = await analyzeRoomForCurate(roomFile, {
+    signal: options?.signal,
+    userIntent: options?.userIntent,
+  });
   const filteredCatalog = filterCatalogByBrief(catalog, brief);
 
   const roomImage = await fileToInlineImage(roomFile);
   const raw = await callGeminiPicker(
     roomImage,
-    buildPickPrompt(filteredCatalog, brief, maxPick),
+    buildPickPrompt(filteredCatalog, brief, maxPick, options?.userIntent),
     options?.signal
   );
 

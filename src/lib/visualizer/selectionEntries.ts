@@ -3,8 +3,8 @@ import type { CatalogItem } from '../medusa/products';
 
 export type SelectionEntry = {
   product: Product;
-  /** Composited in the staged room image */
-  kind: 'placed' | 'staged';
+  /** Already composited in the latest room render */
+  inRoom: boolean;
   imageUrl: string;
 };
 
@@ -13,7 +13,10 @@ export function buildSelectionEntries(
   stagedProducts: Product[],
   placedProducts: Product[]
 ): SelectionEntry[] {
-  const imageById = new Map(catalog.map((item) => [item.product.id, item.displayImage]));
+  const imageById = new Map(
+    catalog.map((item) => [item.product.id, item.catalogImage || item.displayImage])
+  );
+  const placedIds = new Set(placedProducts.map((p) => p.id));
   const seen = new Set<string>();
   const out: SelectionEntry[] = [];
 
@@ -22,7 +25,7 @@ export function buildSelectionEntries(
     seen.add(product.id);
     out.push({
       product,
-      kind: 'placed',
+      inRoom: true,
       imageUrl: imageById.get(product.id) ?? product.image,
     });
   }
@@ -32,7 +35,7 @@ export function buildSelectionEntries(
     seen.add(product.id);
     out.push({
       product,
-      kind: 'staged',
+      inRoom: placedIds.has(product.id),
       imageUrl: imageById.get(product.id) ?? product.image,
     });
   }

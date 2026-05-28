@@ -109,87 +109,64 @@ export default function VisualizerAiActions({
             exit={{ opacity: 0, scale: 0.92, y: -6 }}
             transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
             role="menu"
-            aria-label="AI room actions menu"
-            // Position below the button; right-aligned so it doesn't clip
-            className="absolute right-0 top-[calc(100%+0.5rem)] z-[80] min-w-[220px] overflow-hidden rounded-2xl border border-white/10 bg-[rgba(20,18,15,0.88)] shadow-[0_20px_60px_rgba(0,0,0,0.55)] backdrop-blur-2xl"
+            aria-label="AI room actions"
+            className="absolute right-0 top-[calc(100%+0.5rem)] z-[80] w-[168px] overflow-hidden rounded-xl border border-white/10 bg-[rgba(20,18,15,0.92)] p-1 shadow-[0_16px_48px_rgba(0,0,0,0.5)] backdrop-blur-2xl"
           >
-            {/* Header label */}
-            <div className="border-b border-white/8 px-4 pb-2 pt-3">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-cream/55">
-                AI Room Studio
-              </p>
-              <p className="mt-0.5 text-[11px] leading-snug text-cream/45">
-                Pick how you want the AI to restyle your room.
-              </p>
-            </div>
-
-            {/* ── Option 1: Rearrange ─────────────────────────────────── */}
             <button
               type="button"
               role="menuitem"
+              aria-label="Rearrange — same furniture, smarter layout"
               disabled={!canRearrange || disabled}
               onClick={handleRearrange}
               className={cn(
-                'group flex w-full items-start gap-3 px-4 py-3.5 text-left transition-colors duration-150',
+                'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors duration-150',
                 canRearrange && !disabled
-                  ? 'hover:bg-white/8 active:bg-white/12'
+                  ? 'hover:bg-white/10 active:bg-white/14'
                   : 'cursor-not-allowed opacity-40',
               )}
             >
-              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white/10">
-                <LayoutGrid className="h-4 w-4 text-cream/80" strokeWidth={1.75} />
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white/10">
+                <LayoutGrid className="h-3.5 w-3.5 text-cream/85" strokeWidth={1.75} />
               </span>
-              <span className="flex flex-col gap-1">
-                <span className="text-sm font-semibold text-cream">
-                  Rearrange the Room
+              <span className="min-w-0 flex-1">
+                <span className="block text-[13px] font-medium leading-none text-cream">
+                  Rearrange
                 </span>
-                <span className="text-[12px] leading-snug text-cream/75">
-                  Keeps everything in your photo and moves the furniture into a smarter layout.
+                <span className="mt-1 block text-[10px] leading-none text-cream/45">
+                  Smart layout
                 </span>
               </span>
             </button>
 
-            {/* Divider */}
-            <div className="mx-4 h-px bg-white/8" />
-
-            {/* ── Option 2: AI Curate (premium) ───────────────────────── */}
             <button
               type="button"
               role="menuitem"
+              aria-label="Curate — shop products staged in your room"
               disabled={!canCurate || disabled}
               onClick={handleCurate}
               className={cn(
-                'group relative flex w-full items-start gap-3 px-4 py-3.5 text-left transition-colors duration-150',
+                'group relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors duration-150',
                 canCurate && !disabled
-                  ? 'hover:bg-white/8 active:bg-white/12'
+                  ? 'hover:bg-white/10 active:bg-white/14'
                   : 'cursor-not-allowed opacity-40',
               )}
             >
-              {/* Subtle bronze glow behind the curate option */}
               <span
                 aria-hidden
-                className="pointer-events-none absolute inset-0 rounded-none bg-gradient-to-r from-bronze/8 via-transparent to-transparent opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+                className="pointer-events-none absolute inset-0 rounded-lg bg-gradient-to-r from-bronze/10 to-transparent opacity-0 transition-opacity duration-200 group-hover:opacity-100"
               />
-
-              <span className="relative mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-bronze/30 to-bronze/10 shadow-[0_0_12px_rgba(184,114,58,0.25)]">
-                <Sparkles className="h-4 w-4 text-bronze" strokeWidth={1.75} />
+              <span className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-bronze/20 ring-1 ring-bronze/25">
+                <Sparkles className="h-3.5 w-3.5 text-bronze" strokeWidth={1.75} />
               </span>
-
-              <span className="relative flex flex-col gap-1">
-                <span className="flex items-center gap-1.5">
-                  <span className="text-sm font-semibold text-cream">Curate with AI</span>
-                  <span className="rounded-full bg-gradient-to-r from-bronze to-[#D4944A] px-1.5 py-px text-[9px] font-bold uppercase tracking-wider text-cream shadow-[0_2px_8px_rgba(184,114,58,0.4)]">
-                    AI
-                  </span>
+              <span className="relative min-w-0 flex-1">
+                <span className="block text-[13px] font-medium leading-none text-cream">
+                  Curate
                 </span>
-                <span className="text-[12px] leading-snug text-cream/75">
-                  Picks the best products from our shop and stages them in your room.
+                <span className="mt-1 block text-[10px] leading-none text-bronze/70">
+                  Shop picks
                 </span>
               </span>
             </button>
-
-            {/* Bottom pad */}
-            <div className="pb-1" />
           </motion.div>
         )}
       </AnimatePresence>

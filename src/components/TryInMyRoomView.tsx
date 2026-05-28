@@ -7,14 +7,9 @@ import {
   Scan,
   RotateCcw,
   ArrowLeft,
-  ImagePlus,
-  SlidersHorizontal,
-  Share2,
   Check,
-  ListChecks,
   Plus,
   Sparkles,
-  Home,
 } from 'lucide-react';
 import {
   type Product,
@@ -24,6 +19,7 @@ import {
 } from '../data/scenes';
 import type { CatalogItem } from '../lib/medusa/products';
 import { useFilteredCatalog } from '../hooks/useCatalogProducts';
+import { useMobileRoomImageBounds } from '../hooks/useMobileRoomImageBounds';
 import type { CategoryId } from '../data/categories';
 import CategoryImagePicker from './CategoryImagePicker';
 import { buildShareUrl, sharePageLink } from '../lib/share';
@@ -31,12 +27,17 @@ import { fileToDataUri } from '../lib/medusa/fileToDataUri';
 import { streamRoomAnalyze, streamRoomStage } from '../lib/medusa/roomVisualizerSse';
 import { resolveRoomFileForAi } from '../lib/gemini/roomImageSource';
 import { setCurateBriefForNextStage } from '../lib/gemini/curateStageContext';
+import {
+  EMPTY_CURATE_INTENT,
+  formatCurateIntentLabel,
+  isCurateIntentEmpty,
+  type CurateIntent,
+} from '../lib/gemini/curateIntent';
 import { selectProductsForCurate } from '../lib/gemini/selectProductsForRoom';
+import CurateIntentSheet from './CurateIntentSheet';
 import { buildRoomStageRequest } from '../lib/roomVisualizer/stageRequest';
 import type { RoomStageMode } from '../lib/roomVisualizer/stageRequest';
-import VisualizerAiActions, {
-  type VisualizerAiAction,
-} from './VisualizerAiActions';
+import type { VisualizerAiAction } from './VisualizerAiActions';
 import {
   hashRoomFile,
   loadCachedRoomAnalysis,
@@ -46,12 +47,15 @@ import {
   type RoomSceneAnalysis,
 } from '../lib/roomAnalysis';
 import { loadRoomPhoto, saveRoomPhoto } from '../lib/savedRoom';
-import AskAiToolbarButton from './AskAiToolbarButton';
+import VisualizerSidebarAI from './VisualizerSidebarAI';
+import VisualizerMobileMenu from './VisualizerMobileMenu';
+import SidebarAiButton from './SidebarAiButton';
+import type { AIContext } from '../types/ai';
 import { cn } from '../lib/cn';
 import VisualizerLoading3D from './VisualizerLoading3D';
 import CompareSlider from './CompareSlider';
 import VisualizerProductBar from './VisualizerProductBar';
-import MobileVisualizerPicks from './MobileVisualizerPicks';
+import { countPendingPreview, getPreviewAction } from '../lib/visualizer/selectionState';
 import AddToCartButton from './AddToCartButton';
 import CartIconButton from './CartIconButton';
 import RoomSceneFrame from './RoomSceneFrame';
@@ -61,7 +65,6 @@ import type { AIVisualizerStep } from '../types/ai';
 type Step = 'pick' | 'ready' | 'generating' | 'result';
 type AnalysisStatus = 'idle' | 'loading' | 'ready' | 'error';
 type MobileTab = 'products' | 'details';
-type MobileProductsView = 'browse' | 'picks';
 
 const CATALOG_ASPECT_RATIOS = [
   'aspect-[3/4]',
@@ -106,6 +109,12 @@ interface TryInMyRoomViewProps {
   onCartClick?: () => void;
   /** Open AI designer assistant (optional product context) */
   onOpenAI?: (product?: Product) => void;
+  sidebarAiOpen?: boolean;
+  aiContext?: AIContext;
+  aiInitialQuery?: string;
+  onClearAiInitialQuery?: () => void;
+  onOpenSidebarAI?: () => void;
+  onCloseSidebarAI?: () => void;
   /** Mobile-only: current cart item count */
   cartCount?: number;
   cartPulseKey?: number;
@@ -144,6 +153,12 @@ export default function TryInMyRoomView({
   onElementPersonalize,
   onCartClick,
   onOpenAI,
+  sidebarAiOpen = false,
+  aiContext,
+  aiInitialQuery,
+  onClearAiInitialQuery,
+  onOpenSidebarAI,
+  onCloseSidebarAI,
   cartCount = 0,
   cartPulseKey = 0,
   selectedCategory = 'all',
@@ -168,12 +183,10 @@ export default function TryInMyRoomView({
   const [stageProgress, setStageProgress] = useState<string | null>(null);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<MobileTab>('products');
-  const [mobileProductsView, setMobileProductsView] = useState<MobileProductsView>('browse');
   const [isSilentUpdating, setIsSilentUpdating] = useState(false);
   const [aiBusyAction, setAiBusyAction] = useState<VisualizerAiAction | null>(null);
-  /** Mobile-only: bottom panel expanded over the room (≈70% vs default ≈52%). */
-  const [bottomExpanded, setBottomExpanded] = useState(false);
-
+  const [curateIntentOpen, setCurateIntentOpen] = useState(false);
+  const [curateIntentLabel, setCurateIntentLabel] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<string | null>(null);
   const roomFileRef = useRef<File | null>(null);
@@ -198,8 +211,6 @@ export default function TryInMyRoomView({
   const activeProductImage = activeProduct
     ? getProductDisplayImage(activeProduct, colorSelections)
     : '';
-  const hasSelection = products.length > 0;
-  const hasPlaced = placedProducts.length > 0;
   const stagedIds = useMemo(() => new Set(products.map((p) => p.id)), [products]);
   const placedIds = useMemo(
     () => new Set(placedProducts.map((p) => p.id)),
@@ -217,7 +228,12 @@ export default function TryInMyRoomView({
     return out;
   }, [placedProducts, products]);
   const pickCount = productsForPreview.length;
-
+  const pendingCount = useMemo(
+    () => countPendingPreview(products, placedIds),
+    [products, placedIds]
+  );
+  const hasLivePreview = Boolean(generatedImage && step === 'result');
+  const previewAction = getPreviewAction({ pickCount, pendingCount, hasLivePreview });
   const filteredCatalog = useFilteredCatalog(catalog, selectedCategory);
   const catalogProducts = useMemo(
     () =>
@@ -320,7 +336,6 @@ export default function TryInMyRoomView({
 
   const handleElementSelect = useCallback(
     (element: DetectedRoomElement) => {
-      setBottomExpanded(false);
       setActiveElementId(element.id);
       const stagedIds = new Set(products.map((p) => p.id));
       const suggested = pickBestProductForElement(element, stagedIds, catalog);
@@ -555,7 +570,13 @@ export default function TryInMyRoomView({
     });
   }, [preview, generatedImage, runRoomStageJob]);
 
-  const runCurate = useCallback(async () => {
+  const openCurateIntent = useCallback(() => {
+    if (!roomFileRef.current || catalog.length === 0) return;
+    if (step === 'generating') return;
+    setCurateIntentOpen(true);
+  }, [catalog.length, step]);
+
+  const runCurate = useCallback(async (intent: CurateIntent = EMPTY_CURATE_INTENT) => {
     const roomFile = roomFileRef.current;
     if (!roomFile || catalog.length === 0) return;
 
@@ -565,9 +586,13 @@ export default function TryInMyRoomView({
     abortRef.current = controller;
 
     setError(null);
+    setCurateIntentOpen(false);
+    setCurateIntentLabel(formatCurateIntentLabel(intent));
     setAiBusyAction('curate');
     setStageProgress('Understanding your room…');
     setStep('generating');
+
+    const userIntent = isCurateIntentEmpty(intent) ? undefined : intent;
 
     try {
       const { products: selected, brief } = await selectProductsForCurate(
@@ -576,6 +601,7 @@ export default function TryInMyRoomView({
         {
           signal: controller.signal,
           maxPick: 5,
+          userIntent,
         }
       );
 
@@ -614,6 +640,7 @@ export default function TryInMyRoomView({
       setStep(generatedImage ? 'result' : 'ready');
     } finally {
       setAiBusyAction(null);
+      setCurateIntentLabel(null);
     }
   }, [
     catalog,
@@ -622,6 +649,13 @@ export default function TryInMyRoomView({
     onActiveProductChange,
     runRoomStageJob,
   ]);
+
+  const handleCurateIntentConfirm = useCallback(
+    (intent: CurateIntent) => {
+      void runCurate(intent);
+    },
+    [runCurate]
+  );
 
   const runVisualization = useCallback(async () => {
     const roomFile = roomFileRef.current;
@@ -636,51 +670,8 @@ export default function TryInMyRoomView({
     });
   }, [productsForPreview, runRoomStageJob]);
 
-  // ─── Mobile bottom-panel expand/collapse helpers ─────────────────────────
-  /**
-   * Scroll-driven toggle for the bottom panel:
-   *   • Scroll down to the very bottom of the products list → EXPAND to ~70%.
-   *   • Scroll back up to the very top → COLLAPSE back to ~50%.
-   * This is the only way the user resizes the panel (no buttons).
-   */
-  const handleProductsScroll = useCallback(
-    (e: React.UIEvent<HTMLDivElement>) => {
-      const el = e.currentTarget;
-      const scrollable = el.scrollHeight - el.clientHeight;
-
-      if (!bottomExpanded) {
-        // Trigger expand only when there's something to scroll AND the user
-        // pulled all the way to the bottom.
-        if (scrollable > 40 && el.scrollTop >= scrollable - 4) {
-          setBottomExpanded(true);
-        }
-        return;
-      }
-
-      // Already expanded — if the user scrolls all the way back to the top,
-      // collapse to the standard size.
-      if (el.scrollTop <= 2) {
-        setBottomExpanded(false);
-      }
-    },
-    [bottomExpanded]
-  );
-
-  // Auto-collapse on any room-image-changing action so the user sees the
-  // result after they trigger it.
-  useEffect(() => {
-    if (!bottomExpanded) return;
-    if (step === 'generating' || step === 'result') {
-      setBottomExpanded(false);
-    }
-  }, [bottomExpanded, step]);
-
   const handleCatalogProductTap = useCallback(
     (product: Product) => {
-      // Any product tap on mobile is an action against the room — collapse the
-      // expanded panel so the user can see what they just did.
-      setBottomExpanded(false);
-
       const isPlaced = placedIds.has(product.id);
       const isStaged = stagedIds.has(product.id);
       const isSelected = isPlaced || isStaged;
@@ -695,24 +686,19 @@ export default function TryInMyRoomView({
       }
 
       onStageProduct?.(product);
+      onActiveProductChange(product.id);
     },
     [
       placedIds,
       stagedIds,
       onRemoveProduct,
       onStageProduct,
+      onActiveProductChange,
       handleRemovePlaced,
     ]
   );
 
-  useEffect(() => {
-    if (pickCount === 0) {
-      setMobileProductsView('browse');
-    }
-  }, [pickCount]);
-
   const handlePreview = () => {
-    setBottomExpanded(false);
     void runVisualization();
   };
 
@@ -751,10 +737,9 @@ export default function TryInMyRoomView({
   }, [handleRemovePlaced, registerRemovePlacedFromRoom]);
 
   useEffect(() => {
-    const roomImageUrl =
-      step === 'result' && generatedImage ? generatedImage : null;
+    const roomImageUrl = generatedImage ?? preview ?? null;
     onVisualizerContextChange?.({ step, roomImageUrl });
-  }, [step, generatedImage, onVisualizerContextChange]);
+  }, [step, generatedImage, preview, onVisualizerContextChange]);
 
   const canAiRearrange = Boolean(
     step === 'result' && generatedImage ? generatedImage : preview
@@ -778,7 +763,7 @@ export default function TryInMyRoomView({
       canRearrange: canAiRearrange,
       canCurate: canAiCurate,
       onRearrange: () => void runRearrange(),
-      onCurate: () => void runCurate(),
+      onCurate: openCurateIntent,
     });
   }, [
     activeProduct,
@@ -794,7 +779,7 @@ export default function TryInMyRoomView({
     canAiRearrange,
     canAiCurate,
     runRearrange,
-    runCurate,
+    openCurateIntent,
   ]);
 
   const showStagedResult = step === 'result' && Boolean(generatedImage);
@@ -811,21 +796,28 @@ export default function TryInMyRoomView({
     Boolean(preview && displayImage) &&
     (step === 'ready' || step === 'generating' || step === 'result');
 
-  const canPreview = step === 'ready' && productsForPreview.length > 0;
+  const canRunPreview =
+    step !== 'generating' &&
+    step !== 'pick' &&
+    productsForPreview.length > 0 &&
+    (pendingCount > 0 || !generatedImage || previewAction === 'regenerate');
   const showCompare = step === 'result' && Boolean(preview && generatedImage);
-  const toolbarAiActions =
-    step !== 'pick' ? (
-      <VisualizerAiActions
-        variant="toolbar"
-        disabled={step === 'generating'}
-        busy={Boolean(aiBusyAction)}
-        busyAction={aiBusyAction}
-        canRearrange={canAiRearrange}
-        canCurate={canAiCurate}
-        onRearrange={() => void runRearrange()}
-        onCurate={() => void runCurate()}
-      />
-    ) : null;
+  const layoutVariant = variant ?? 'desktop';
+  const mobileRoomBounds = useMobileRoomImageBounds(
+    displayImage,
+    layoutVariant === 'mobile' && step !== 'pick' && Boolean(displayImage)
+  );
+  const mobileImageMaxHeight =
+    'calc(100dvh - 44dvh - 2.75rem - env(safe-area-inset-top) - env(safe-area-inset-bottom))';
+  const curateIntentSheet = (
+    <CurateIntentSheet
+      open={curateIntentOpen}
+      variant={layoutVariant}
+      busy={Boolean(aiBusyAction)}
+      onClose={() => setCurateIntentOpen(false)}
+      onConfirm={handleCurateIntentConfirm}
+    />
+  );
 
   // ─── SHARED: room image content ────────────────────────────────────────────
   const roomImageContent = (
@@ -866,10 +858,14 @@ export default function TryInMyRoomView({
             // Safe insets so the FULL room photo is visible inside the
             // chrome — i.e. not hidden behind the top toolbar or the
             // bottom product capsule.
-            //   Mobile: top controls bar + iPhone notch via safe-area;
-            //           bottom edge handled by the sliding sheet, so 0.
+            //   Mobile: fixed 60% viewport + safe-area; product bar lives in bottom 40%.
             //   Desktop: ~96 px top toolbar; ~120 px bottom product capsule.
-            className="absolute inset-x-0 top-[max(3.5rem,calc(env(safe-area-inset-top)+3.25rem))] bottom-0 z-0 lg:top-24 lg:bottom-28"
+            className={cn(
+              'absolute inset-x-0 z-0',
+              layoutVariant === 'mobile'
+                ? 'top-[max(2.5rem,calc(env(safe-area-inset-top)+2.25rem))] bottom-2'
+                : 'top-[max(3rem,calc(env(safe-area-inset-top)+2.75rem))] bottom-0 lg:top-24 lg:bottom-28'
+            )}
           >
             {isComparing && preview && generatedImage ? (
               <CompareSlider
@@ -916,7 +912,11 @@ export default function TryInMyRoomView({
                   ? 'Curating your room'
                   : 'Creating your staged room'
             }
-            sublabel={stageProgress ?? 'Working with Gemini…'}
+            sublabel={
+              aiBusyAction === 'curate' && curateIntentLabel
+                ? `${stageProgress ?? 'Working…'} · ${curateIntentLabel}`
+                : stageProgress ?? 'Working with Gemini…'
+            }
           />
         </div>
       )}
@@ -925,8 +925,105 @@ export default function TryInMyRoomView({
 
   // ─── MOBILE LAYOUT ─────────────────────────────────────────────────────────
   if (variant === 'mobile') {
+    const mobileAiOpen =
+      sidebarAiOpen && Boolean(aiContext) && Boolean(onCloseSidebarAI);
+    const mobileChromeGlass = step !== 'pick' ? 'glass-dark text-cream/90' : 'glass text-ink';
+
+    const mobileDetailsPanel = !activeProduct ? (
+      <div className="flex items-center justify-center py-10 text-center">
+        <p className="text-sm text-ink-muted">Pick a product to see details</p>
+      </div>
+    ) : (
+      <div className="flex flex-col gap-4 pb-2">
+        <div className="relative overflow-hidden rounded-2xl bg-parchment/60">
+          <motion.img
+            key={activeProductImage}
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+            src={activeProductImage}
+            alt={activeProduct.name}
+            className="aspect-[4/3] w-full object-contain p-4 mix-blend-multiply"
+          />
+        </div>
+
+        <div className="flex items-start justify-between gap-3 border-b border-ink/8 pb-3">
+          <div className="min-w-0">
+            <h3 className="font-display text-2xl font-medium leading-tight tracking-tight text-ink">
+              {activeProduct.name}
+            </h3>
+            {activeVariant && (
+              <p className="mt-1 text-sm font-medium text-bronze">{activeVariant.name}</p>
+            )}
+          </div>
+          <span className="shrink-0 font-display text-lg font-medium text-bronze">
+            {activeProduct.price}
+          </span>
+        </div>
+
+        {activeProduct.variants && activeProduct.variants.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {activeProduct.variants.map((v) => {
+              const isSelected =
+                v.id === (activeVariant?.id ?? activeProduct.variants?.[0]?.id);
+              return (
+                <button
+                  key={v.id}
+                  type="button"
+                  onClick={() => onColorSelect(activeProduct.id, v.id)}
+                  className={cn(
+                    'flex items-center gap-2 rounded-full border px-2.5 py-1.5 transition-all active:scale-[0.98]',
+                    isSelected
+                      ? 'border-ink/25 bg-parchment'
+                      : 'border-ink/10 bg-cream/80'
+                  )}
+                  aria-pressed={isSelected}
+                >
+                  <span
+                    className="h-5 w-5 shrink-0 rounded-full border border-ink/15"
+                    style={{ backgroundColor: v.swatch }}
+                  />
+                  <span className="text-xs font-medium text-ink">{v.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        <p className="text-sm leading-relaxed text-ink-muted">{activeProduct.description}</p>
+
+        {onOpenAI && (
+          <button
+            type="button"
+            onClick={() => onOpenAI(activeProduct)}
+            className="flex w-full items-center gap-2 rounded-xl border border-ink/8 px-3 py-2.5 text-left text-sm font-medium text-ink active:scale-[0.99]"
+          >
+            <Sparkles className="h-4 w-4 text-bronze" strokeWidth={1.75} />
+            Ask AI about this piece
+          </button>
+        )}
+
+        {placedIds.has(activeProduct.id) && (
+          <button
+            type="button"
+            onClick={() => handleRemovePlaced(activeProduct.id)}
+            className="flex w-full items-center justify-center gap-2 rounded-full border border-ink/12 py-2.5 text-xs font-medium text-ink-muted active:scale-[0.99]"
+          >
+            <X className="h-3.5 w-3.5" strokeWidth={2} />
+            Remove from room
+          </button>
+        )}
+
+        <AddToCartButton
+          variant="full"
+          onClick={() => onAddToCart?.(activeProduct)}
+        />
+      </div>
+    );
+
     return (
-      <div className="relative flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden bg-ink">
+      <>
+      <div className="relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-ink">
         <input
           ref={inputRef}
           id="visualizer-room-photo-input"
@@ -940,16 +1037,14 @@ export default function TryInMyRoomView({
           }}
         />
 
-        {/* ── TOP: Room visualizer (shrinks when bottom is expanded) ──── */}
-        <motion.div
-          className="relative min-h-0 overflow-hidden"
-          initial={false}
-          animate={{ flexBasis: bottomExpanded ? '30%' : '48%' }}
-          transition={{ duration: 0.42, ease: [0.32, 0.72, 0, 1] }}
-          style={{ flexGrow: 0, flexShrink: 0 }}
+        {/* Room — height follows image aspect ratio; catalog fills the rest */}
+        <div
+          className={cn(
+            'relative w-full shrink-0 overflow-hidden bg-cream',
+            step === 'pick' && 'min-h-[34dvh]'
+          )}
+          style={{ paddingTop: 'env(safe-area-inset-top)' }}
         >
-
-          {/* Upload CTA (step = pick) */}
           <AnimatePresence mode="wait">
             {step === 'pick' ? (
               <motion.button
@@ -959,7 +1054,7 @@ export default function TryInMyRoomView({
                 exit={{ opacity: 0 }}
                 type="button"
                 onClick={() => inputRef.current?.click()}
-                className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-ink active:bg-ink/90"
+                className="flex min-h-[calc(34dvh-env(safe-area-inset-top))] w-full flex-col items-center justify-center gap-4 bg-ink px-6 active:bg-ink/90"
               >
                 <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-bronze shadow-[0_4px_20px_rgba(184,114,58,0.40)]">
                   <Upload className="h-6 w-6 text-cream" strokeWidth={1.75} />
@@ -967,11 +1062,9 @@ export default function TryInMyRoomView({
                 <div className="text-center">
                   <p className="text-lg font-medium text-cream">Upload your room</p>
                   <p className="mt-1 text-sm text-cream/55">JPG · PNG · HEIC</p>
-                  {(hasSelection || hasPlaced) && (
+                  {pickCount > 0 && (
                     <p className="mt-2 text-xs font-semibold text-bronze">
-                      {hasPlaced
-                        ? `${placedProducts.length} in your room`
-                        : `${products.length} product${products.length > 1 ? 's' : ''} ready to stage`}
+                      {pickCount} selected
                     </p>
                   )}
                 </div>
@@ -982,16 +1075,77 @@ export default function TryInMyRoomView({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="absolute inset-0"
+                className="relative w-full pt-10"
               >
-                {roomImageContent}
+                <div
+                  className="relative mx-auto w-full"
+                  style={
+                    mobileRoomBounds
+                      ? {
+                          aspectRatio: `${mobileRoomBounds.naturalWidth} / ${mobileRoomBounds.naturalHeight}`,
+                          maxHeight: mobileImageMaxHeight,
+                        }
+                      : { maxHeight: mobileImageMaxHeight }
+                  }
+                >
+                  {isComparing && preview && generatedImage ? (
+                    <CompareSlider
+                      originalImage={preview}
+                      generatedImage={generatedImage}
+                      className="h-full w-full min-h-[120px]"
+                    />
+                  ) : showOriginalWithHotspots && preview ? (
+                    <RoomSceneFrame
+                      imageSrc={preview}
+                      alt="Your room"
+                      analysis={roomAnalysis}
+                      activeElementId={activeElementId}
+                      showHotspots={showHotspots}
+                      onElementSelect={handleElementSelect}
+                      className="relative h-full min-h-[120px] w-full"
+                    />
+                  ) : (
+                    displayImage && (
+                      <img
+                        key={
+                          showStagedResult
+                            ? `staged-m-${resultRevision}`
+                            : `room-m-${(preview ?? '').length}`
+                        }
+                        src={displayImage}
+                        alt={showStagedResult ? 'AI staged room' : 'Your room'}
+                        className="block h-auto w-full max-h-[inherit] object-contain"
+                        draggable={false}
+                      />
+                    )
+                  )}
+                </div>
+
+                {step === 'generating' && (
+                  <div className="absolute inset-0 z-50 flex items-center justify-center bg-ink/45 backdrop-blur-[2px]">
+                    <VisualizerLoading3D
+                      overlay
+                      label={
+                        aiBusyAction === 'rearrange'
+                          ? 'Rearranging your room'
+                          : aiBusyAction === 'curate'
+                            ? 'Curating your room'
+                            : 'Creating your staged room'
+                      }
+                      sublabel={
+                        aiBusyAction === 'curate' && curateIntentLabel
+                          ? `${stageProgress ?? 'Working…'} · ${curateIntentLabel}`
+                          : stageProgress ?? 'Working with Gemini…'
+                      }
+                    />
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
 
-          {/* Scanning / hotspot hint — bottom of room area */}
           {preview && step === 'ready' && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex justify-center px-4">
+            <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex justify-center px-4">
               <AnimatePresence mode="wait">
                 {analysisStatus === 'loading' && (
                   <motion.div
@@ -999,11 +1153,11 @@ export default function TryInMyRoomView({
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 6 }}
-                    className="glass-dark pointer-events-none flex items-center gap-2 rounded-full px-4 py-2"
+                    className="glass-dark flex items-center gap-2 rounded-full px-4 py-2"
                   >
                     <Scan className="h-3.5 w-3.5 animate-pulse text-bronze" strokeWidth={1.75} />
                     <span className="text-xs font-medium text-cream/85">
-                      {analysisProgress ?? 'Finding items…'}
+                      {analysisProgress ?? 'Scanning room…'}
                     </span>
                   </motion.div>
                 )}
@@ -1013,10 +1167,10 @@ export default function TryInMyRoomView({
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 6 }}
-                    className="glass-dark pointer-events-none rounded-full px-4 py-2"
+                    className="glass-dark rounded-full px-4 py-2"
                   >
                     <span className="text-xs font-medium text-cream/80">
-                      Tap a dot to personalize
+                      Tap a dot to swap furniture
                     </span>
                   </motion.div>
                 )}
@@ -1024,9 +1178,8 @@ export default function TryInMyRoomView({
             </div>
           )}
 
-          {/* Analysis error */}
           {analysisStatus === 'error' && preview && step === 'ready' && (
-            <div className="absolute inset-x-4 bottom-3 z-20">
+            <div className="pointer-events-auto absolute inset-x-4 bottom-4 z-20">
               <div className="glass-dark flex items-start gap-2 rounded-2xl px-4 py-3">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-bronze" />
                 <div className="min-w-0 flex-1">
@@ -1044,9 +1197,8 @@ export default function TryInMyRoomView({
             </div>
           )}
 
-          {/* Visualization error */}
           {error && step !== 'pick' && (
-            <div className="absolute inset-x-4 bottom-3 z-[55]">
+            <div className="pointer-events-none absolute inset-x-4 bottom-4 z-[55]">
               <div className="glass-dark flex items-start gap-2 rounded-2xl px-4 py-3">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-bronze" />
                 <p className="text-sm text-cream/80">{error}</p>
@@ -1054,80 +1206,39 @@ export default function TryInMyRoomView({
             </div>
           )}
 
-          {/* ── Top controls bar ──────────────────────────────── */}
-          <div
-            className="absolute inset-x-0 top-0 z-30 flex items-center justify-between px-4"
-            style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}
-          >
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center justify-between px-3 pt-2">
             <button
               type="button"
               onClick={onClose}
               className={cn(
-                'flex h-9 items-center gap-1.5 rounded-full px-3 text-xs font-medium transition-all active:scale-95',
-                step !== 'pick' ? 'glass-dark text-cream/90' : 'glass text-ink'
+                'pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full transition-all active:scale-95',
+                mobileChromeGlass
               )}
+              aria-label="Back to shop"
             >
               <ArrowLeft className="h-4 w-4" strokeWidth={1.75} />
-              Shop
             </button>
 
-            <div className="flex items-center gap-1.5">
-              {step !== 'generating' && (
-                <button
-                  type="button"
-                  onClick={openRoomPhotoPicker}
-                  className={cn(
-                    'flex h-9 w-9 items-center justify-center rounded-full transition-all active:scale-95',
-                    step !== 'pick' ? 'glass-dark text-cream/90' : 'glass text-ink'
-                  )}
-                  aria-label="Change room photo"
-                >
-                  <ImagePlus className="h-4 w-4" strokeWidth={1.75} />
-                </button>
-              )}
-
-              {showCompare && (
-                <button
-                  type="button"
-                  onClick={() => setIsComparing((v) => !v)}
-                  className={cn(
-                    'flex h-9 w-9 items-center justify-center rounded-full transition-all active:scale-95',
-                    isComparing ? 'bg-bronze text-cream shadow-md' : 'glass-dark text-cream/90'
-                  )}
-                  aria-label="Compare before/after"
-                  aria-pressed={isComparing}
-                >
-                  <SlidersHorizontal className="h-4 w-4" strokeWidth={1.75} />
-                </button>
-              )}
-
-              {toolbarAiActions}
-
-              <button
-                type="button"
-                onClick={() => void handleShare()}
-                disabled={!activeProduct}
-                className={cn(
-                  'flex h-9 w-9 items-center justify-center rounded-full transition-all active:scale-95',
-                  step !== 'pick'
-                    ? activeProduct
-                      ? 'glass-dark text-cream/90'
-                      : 'glass-dark text-cream/30 cursor-not-allowed'
-                    : activeProduct
-                      ? 'glass text-ink'
-                      : 'glass text-ink/30 cursor-not-allowed'
-                )}
-                aria-label="Share"
-              >
-                {shareFeedback !== 'idle' ? (
-                  <Check className="h-4 w-4 text-[#8BC48B]" strokeWidth={2} />
-                ) : (
-                  <Share2 className="h-4 w-4" strokeWidth={1.75} />
-                )}
-              </button>
-
-              {onOpenAI && (
-                <AskAiToolbarButton onClick={() => onOpenAI()} variant="dark" />
+            <div className="pointer-events-auto flex items-center gap-2">
+              {step !== 'pick' && (
+                <VisualizerMobileMenu
+                  disabled={step === 'generating'}
+                  canShare={Boolean(activeProduct)}
+                  shareCopied={shareFeedback === 'copied'}
+                  showCompare={showCompare}
+                  isComparing={isComparing}
+                  showChangePhoto={step !== 'generating'}
+                  canRearrange={canAiRearrange}
+                  canCurate={canAiCurate}
+                  aiBusy={Boolean(aiBusyAction)}
+                  aiBusyAction={aiBusyAction}
+                  onShare={() => void handleShare()}
+                  onToggleCompare={() => setIsComparing((v) => !v)}
+                  onChangePhoto={openRoomPhotoPicker}
+                  onRearrange={() => void runRearrange()}
+                  onCurate={openCurateIntent}
+                  onAskAi={onOpenSidebarAI}
+                />
               )}
 
               <CartIconButton
@@ -1135,490 +1246,200 @@ export default function TryInMyRoomView({
                 pulseKey={cartPulseKey}
                 onClick={onCartClick}
                 className={cn(
-                  'flex h-9 w-9 items-center justify-center rounded-full transition-all active:scale-95',
-                  step !== 'pick' ? 'glass-dark text-cream' : 'glass text-ink'
+                  'flex h-10 w-10 items-center justify-center rounded-full transition-all active:scale-95',
+                  mobileChromeGlass
                 )}
                 iconClassName="h-4 w-4"
                 badgeClassName="text-[9px] min-w-4 h-4"
               />
             </div>
           </div>
-        </motion.div>
+        </div>
 
-        {/* ── BOTTOM: Tab panel (expands to ~70% when triggered) ──────── */}
-        <motion.div
-          className="relative flex min-h-0 flex-col overflow-hidden rounded-t-[1.5rem] bg-cream shadow-[0_-12px_40px_rgba(0,0,0,0.30)]"
-          initial={false}
-          animate={{ flexBasis: bottomExpanded ? '70%' : '52%' }}
-          transition={{ duration: 0.42, ease: [0.32, 0.72, 0, 1] }}
-          style={{ flexGrow: 1, flexShrink: 1 }}
-        >
-          {/* Grab handle — visual affordance only; collapsing happens by
-              scrolling the products list back to the top. */}
-          <div
-            aria-hidden
-            className="relative z-20 mx-auto mt-1.5 mb-0.5 flex h-3 w-12 shrink-0 items-center justify-center"
-          >
-            <span className="block h-1 w-10 rounded-full bg-ink/15" />
-          </div>
-
-          {/* Tab bar */}
-          <div className="shrink-0 px-4 pt-3 pb-1">
-            <div className="flex rounded-full bg-parchment p-1 gap-0.5">
-              {(['products', 'details'] as MobileTab[]).map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => {
-                    setActiveTab(tab);
-                    setBottomExpanded(false);
-                  }}
-                  className={cn(
-                    'flex flex-1 items-center justify-center gap-1.5 rounded-full py-2 text-xs font-semibold capitalize transition-all duration-200 active:scale-[0.98]',
-                    activeTab === tab
-                      ? 'bg-ink text-cream shadow-sm'
-                      : 'text-ink-muted hover:text-ink'
-                  )}
-                >
-                  {tab === 'products' ? 'Products' : 'Details'}
-                  {tab === 'products' && pickCount > 0 && (
-                    <span
+        {/* Bottom panel — fills space below the image (min ~44% viewport) */}
+        <div className="flex min-h-[44dvh] min-w-0 flex-1 flex-col overflow-hidden rounded-t-[1.25rem] bg-cream shadow-[0_-8px_28px_rgba(0,0,0,0.22)]">
+          {mobileAiOpen && aiContext && onCloseSidebarAI ? (
+            <VisualizerSidebarAI
+              className="min-h-0 flex-1"
+              context={aiContext}
+              active={sidebarAiOpen}
+              initialQuery={aiInitialQuery}
+              onClearInitialQuery={onClearAiInitialQuery}
+              onBack={onCloseSidebarAI}
+              onTryInRoom={onStageProduct}
+              onAddToCart={onAddToCart}
+              onProductClick={(p) => {
+                onCloseSidebarAI();
+                onActiveProductChange(p.id);
+                setActiveTab('details');
+              }}
+            />
+          ) : (
+            <>
+              <div className="shrink-0 px-4 pt-2.5 pb-2">
+                <div className="flex rounded-full bg-parchment p-0.5">
+                  {(['products', 'details'] as MobileTab[]).map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setActiveTab(tab)}
                       className={cn(
-                        'flex h-4 min-w-4 items-center justify-center rounded-full px-0.5 text-[9px] font-bold tabular-nums',
-                        activeTab === 'products' ? 'bg-cream/20 text-cream' : 'bg-bronze/20 text-bronze'
+                        'flex flex-1 items-center justify-center gap-1 rounded-full py-2 text-xs font-semibold transition-all active:scale-[0.98]',
+                        activeTab === tab ? 'bg-ink text-cream' : 'text-ink-muted'
                       )}
                     >
-                      {pickCount}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Tab content */}
-          <AnimatePresence mode="wait">
-            {activeTab === 'products' ? (
-              <motion.div
-                key="tab-products"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.18 }}
-                className="flex min-h-0 flex-1 flex-col overflow-hidden"
-              >
-                {pickCount > 0 && (
-                  <div className="shrink-0 px-4 pb-2">
-                    <div
-                      className="flex rounded-full bg-parchment p-0.5"
-                      role="tablist"
-                      aria-label="Product views"
-                    >
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={mobileProductsView === 'browse'}
-                        onClick={() => setMobileProductsView('browse')}
-                        className={cn(
-                          'flex flex-1 items-center justify-center rounded-full py-2 text-xs font-semibold transition-all active:scale-[0.98]',
-                          mobileProductsView === 'browse'
-                            ? 'bg-cream text-ink shadow-sm'
-                            : 'text-ink-muted'
-                        )}
-                      >
-                        Shop
-                      </button>
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={mobileProductsView === 'picks'}
-                        onClick={() => setMobileProductsView('picks')}
-                        className={cn(
-                          'flex flex-1 items-center justify-center gap-1.5 rounded-full py-2 text-xs font-semibold transition-all active:scale-[0.98]',
-                          mobileProductsView === 'picks'
-                            ? 'bg-cream text-ink shadow-sm'
-                            : 'text-ink-muted'
-                        )}
-                      >
-                        Your picks
+                      {tab === 'products' ? 'Catalog' : 'Details'}
+                      {tab === 'products' && pickCount > 0 && (
                         <span
                           className={cn(
-                            'flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-bold tabular-nums',
-                            mobileProductsView === 'picks' ? 'bg-ink text-cream' : 'bg-ink/12 text-ink'
+                            'flex h-4 min-w-4 items-center justify-center rounded-full px-0.5 text-[9px] font-bold tabular-nums',
+                            activeTab === 'products'
+                              ? 'bg-cream/20 text-cream'
+                              : 'bg-bronze/20 text-bronze'
                           )}
                         >
                           {pickCount}
                         </span>
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {mobileProductsView === 'picks' ? (
-                  <MobileVisualizerPicks
-                    catalog={catalog}
-                    stagedProducts={products}
-                    placedProducts={placedProducts}
-                    activeProductId={activeProductId}
-                    onFocusProduct={(id) => {
-                      onActiveProductChange(id);
-                      setActiveTab('details');
-                    }}
-                    onOpenDetails={() => setActiveTab('details')}
-                    onRemoveStaged={onRemoveProduct}
-                    onRemovePlaced={handleRemovePlaced}
-                  />
-                ) : (
-                  <>
-                    {onCategorySelect && (
-                      <div className="shrink-0 border-b border-ink/6 px-4 py-2">
-                        <CategoryImagePicker
-                          selectedCategory={selectedCategory}
-                          onSelectCategory={onCategorySelect}
-                          variant="header"
-                        />
-                      </div>
-                    )}
-
-                    <div
-                      className="min-h-0 flex-1 overflow-y-auto overscroll-contain no-scrollbar px-4 py-3"
-                      onScroll={handleProductsScroll}
-                    >
-                      {pickCount > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setMobileProductsView('picks')}
-                          className="mb-3 flex w-full items-center justify-between rounded-xl border border-bronze/25 bg-bronze/8 px-3 py-2.5 text-left active:scale-[0.99]"
-                        >
-                          <span className="text-xs font-semibold text-ink">
-                            {pickCount} selected for preview
-                          </span>
-                          <span className="text-xs font-semibold text-bronze">View picks →</span>
-                        </button>
-                      )}
-                      <p className="mb-3 text-[10px] font-medium uppercase tracking-[0.18em] text-ink-faint">
-                        Tap + to queue · tap again to remove
-                      </p>
-                      <div className="columns-2 gap-2.5">
-                        {catalogProducts.map(({ product, sceneImage }, index) => {
-                          const isActive = activeProduct?.id === product.id;
-                          const isPlaced = placedIds.has(product.id);
-                          const isStaged = stagedIds.has(product.id);
-                          const heightClass =
-                            CATALOG_ASPECT_RATIOS[index % CATALOG_ASPECT_RATIOS.length];
-                          return (
-                            <button
-                              key={product.id}
-                              type="button"
-                              onClick={() => handleCatalogProductTap(product)}
-                              className="group relative mb-2.5 flex w-full break-inside-avoid flex-col text-left transition-all active:scale-[0.98]"
-                            >
-                              <div
-                                className={cn(
-                                  'relative w-full overflow-hidden rounded-2xl bg-parchment/60',
-                                  heightClass,
-                                  (isPlaced || isStaged) && 'ring-1 ring-ink/20',
-                                  isActive &&
-                                    (isPlaced || isStaged) &&
-                                    'ring-ink/35 shadow-[0_0_0_1px_rgba(28,26,23,0.06)]'
-                                )}
-                              >
-                                <img
-                                  src={sceneImage}
-                                  alt={product.name}
-                                  className="absolute inset-0 h-full w-full object-cover"
-                                  loading="lazy"
-                                />
-                                <div className="absolute inset-0 bg-ink/0 transition-colors group-active:bg-ink/10" />
-                                <span
-                                  className={cn(
-                                    'absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full shadow-sm backdrop-blur-sm',
-                                    isPlaced
-                                      ? 'bg-ink text-cream'
-                                      : isStaged
-                                        ? 'bg-bronze text-cream'
-                                        : 'bg-cream/95 text-ink-muted ring-1 ring-ink/10'
-                                  )}
-                                  aria-hidden
-                                >
-                                  {isPlaced ? (
-                                    <Home className="h-3.5 w-3.5" strokeWidth={1.75} />
-                                  ) : isStaged ? (
-                                    <ListChecks className="h-3.5 w-3.5" strokeWidth={2} />
-                                  ) : (
-                                    <Plus className="h-3.5 w-3.5" strokeWidth={2} />
-                                  )}
-                                </span>
-                              </div>
-                              <div className="mt-2 flex items-center justify-between gap-1 px-0.5">
-                                <p className="line-clamp-1 text-[11px] font-medium text-ink">
-                                  {product.name}
-                                </p>
-                                <span className="shrink-0 font-display text-[10px] italic text-bronze">
-                                  {product.price}
-                                </span>
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                <footer
-                  className="shrink-0 border-t border-ink/8 bg-cream/95 px-4 py-3 backdrop-blur-md"
-                  style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
-                >
-                  {productsForPreview.length === 0 ? (
-                    <p className="mb-2 text-center text-[11px] text-ink-muted">
-                      Tap a product to stage it in your room
-                    </p>
-                  ) : (
-                    <p className="mb-2 text-center text-[11px] text-ink-muted">
-                      {productsForPreview.length > 1 ? (
-                        <>
-                          <span className="font-semibold text-ink">Preview all</span>
-                          {' '}
-                          stages {productsForPreview.length} pieces in your room
-                        </>
-                      ) : (
-                        <>
-                          Details for each piece in the{' '}
-                          <button
-                            type="button"
-                            onClick={() => setActiveTab('details')}
-                            className="font-semibold text-bronze"
-                          >
-                            Details
-                          </button>
-                          {' '}
-                          tab
-                        </>
-                      )}
-                    </p>
-                  )}
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={handlePreview}
-                      disabled={step === 'generating' || (!canPreview && step !== 'result')}
-                      className={cn(
-                        'flex flex-1 items-center justify-center gap-2 rounded-full py-3.5 text-sm font-semibold transition-all active:scale-[0.99]',
-                        step === 'result'
-                          ? 'border border-ink/12 bg-parchment text-ink'
-                          : canPreview
-                            ? 'bg-bronze text-cream shadow-[0_4px_18px_rgba(184,114,58,0.28)]'
-                            : 'cursor-not-allowed bg-parchment text-ink/30'
-                      )}
-                    >
-                      {step === 'result' ? (
-                        <>
-                          <RotateCcw className="h-4 w-4" strokeWidth={1.75} />
-                          Regenerate
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="h-4 w-4" strokeWidth={2} />
-                          {productsForPreview.length > 1 ? 'Preview all' : 'Preview room'}
-                        </>
                       )}
                     </button>
-                    {activeProduct && (placedIds.has(activeProduct.id) || stagedIds.has(activeProduct.id)) && (
-                      <AddToCartButton
-                        variant="icon"
-                        onClick={() => onAddToCart?.(activeProduct)}
-                        className="h-[50px] w-[50px] shrink-0"
-                      />
-                    )}
-                  </div>
-                </footer>
-              </motion.div>
-            ) : (
-              /* Details tab */
-              <motion.div
-                key="tab-details"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.18 }}
-                className="flex min-h-0 flex-1 flex-col overflow-hidden"
-              >
-                <div
-                  className="min-h-0 flex-1 overflow-y-auto overscroll-contain no-scrollbar px-4 pt-3"
-                  style={{ paddingBottom: '0.5rem' }}
-                >
-                {!activeProduct ? (
-                  <div className="flex flex-1 items-center justify-center py-8 text-center">
-                    <p className="text-sm text-ink-muted">Select a product to see details</p>
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-4">
-                    <div className="relative overflow-hidden rounded-2xl bg-parchment/60">
-                      <div
-                        className="pointer-events-none absolute inset-0 bg-gradient-to-br from-bronze-soft/25 via-transparent to-transparent"
-                        aria-hidden
-                      />
-                      <motion.img
-                        key={activeProductImage}
-                        initial={{ opacity: 0, scale: 0.98 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-                        src={activeProductImage}
-                        alt={activeProduct.name}
-                        className="relative aspect-[4/3] w-full object-contain p-4 mix-blend-multiply"
-                      />
-                    </div>
+                  ))}
+                </div>
+              </div>
 
-                    {/* Name + price */}
-                    <div className="flex items-start justify-between gap-3 border-b border-ink/8 pb-4">
-                      <div className="min-w-0">
-                        <h3 className="font-display text-[1.7rem] font-medium leading-[1.15] tracking-tight text-ink">
-                          {activeProduct.name}
-                        </h3>
-                        {activeVariant && (
-                          <p className="mt-1 font-display text-sm italic text-bronze">
-                            {activeVariant.name}
-                          </p>
-                        )}
-                      </div>
-                      <span className="shrink-0 font-display text-xl font-medium italic text-bronze">
-                        {activeProduct.price}
-                      </span>
-                    </div>
-
-                    {/* Color variants — full pill style */}
-                    {activeProduct.variants && activeProduct.variants.length > 0 && (
-                      <div className="space-y-2.5">
-                        <div className="flex items-center justify-between">
-                          <p className="text-[10px] font-medium uppercase tracking-[0.2em] text-ink-faint">
-                            Finish
-                          </p>
-                          {activeVariant && (
-                            <p className="text-xs font-medium text-bronze">{activeVariant.name}</p>
-                          )}
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                <AnimatePresence mode="wait">
+                  {activeTab === 'products' ? (
+                    <motion.div
+                      key="tab-products"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.15 }}
+                      className="flex min-h-0 flex-1 flex-col overflow-hidden"
+                    >
+                      {onCategorySelect && (
+                        <div className="shrink-0 border-b border-ink/6 px-4 py-2">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <CategoryImagePicker
+                              selectedCategory={selectedCategory}
+                              onSelectCategory={onCategorySelect}
+                              variant="header"
+                              className="min-w-0 flex-1"
+                            />
+                            {onOpenSidebarAI && (
+                              <SidebarAiButton onClick={onOpenSidebarAI} />
+                            )}
+                          </div>
                         </div>
-                        <div className="flex flex-wrap gap-2">
-                          {activeProduct.variants.map((v) => {
+                      )}
+
+                      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain no-scrollbar px-4 py-2">
+                        <div className="columns-2 gap-2.5">
+                          {catalogProducts.map(({ product, sceneImage }, index) => {
+                            const isActive = activeProduct?.id === product.id;
                             const isSelected =
-                              v.id === (activeVariant?.id ?? activeProduct.variants?.[0]?.id);
+                              placedIds.has(product.id) || stagedIds.has(product.id);
+                            const heightClass =
+                              CATALOG_ASPECT_RATIOS[index % CATALOG_ASPECT_RATIOS.length];
                             return (
                               <button
-                                key={v.id}
+                                key={product.id}
                                 type="button"
-                                onClick={() => onColorSelect(activeProduct.id, v.id)}
-                                className={cn(
-                                  'flex items-center gap-2 rounded-full border px-2 py-1.5 transition-all active:scale-[0.98]',
-                                  isSelected
-                                    ? 'border-ink/30 bg-parchment shadow-[0_2px_8px_rgba(28,26,23,0.08)]'
-                                    : 'border-ink/10 bg-cream/60'
-                                )}
-                                aria-pressed={isSelected}
+                                onClick={() => handleCatalogProductTap(product)}
+                                className="group relative mb-2.5 flex w-full break-inside-avoid flex-col text-left active:scale-[0.98]"
                               >
-                                <span
+                                <div
                                   className={cn(
-                                    'h-5 w-5 shrink-0 rounded-full border-2',
-                                    isSelected
-                                      ? 'border-ink/30 ring-2 ring-ink/10 ring-offset-1'
-                                      : 'border-ink/10'
-                                  )}
-                                  style={{ backgroundColor: v.swatch }}
-                                />
-                                <span
-                                  className={cn(
-                                    'pr-0.5 text-xs font-medium',
-                                    isSelected ? 'text-ink' : 'text-ink-muted'
+                                    'relative w-full overflow-hidden rounded-xl bg-parchment/60',
+                                    heightClass,
+                                    isSelected && 'ring-2 ring-bronze/40',
+                                    isActive && isSelected && 'ring-ink/25'
                                   )}
                                 >
-                                  {v.name}
-                                </span>
+                                  <img
+                                    src={sceneImage}
+                                    alt={product.name}
+                                    className="absolute inset-0 h-full w-full object-cover"
+                                    loading="lazy"
+                                  />
+                                  <span
+                                    className={cn(
+                                      'absolute right-1.5 top-1.5 flex h-8 w-8 items-center justify-center rounded-full',
+                                      isSelected
+                                        ? 'bg-bronze text-cream'
+                                        : 'bg-cream/95 text-ink ring-1 ring-ink/10'
+                                    )}
+                                    aria-hidden
+                                  >
+                                    {isSelected ? (
+                                      <Check className="h-4 w-4" strokeWidth={2.5} />
+                                    ) : (
+                                      <Plus className="h-4 w-4" strokeWidth={2} />
+                                    )}
+                                  </span>
+                                </div>
+                                <p className="mt-1.5 line-clamp-1 text-xs font-medium text-ink">
+                                  {product.name}
+                                </p>
                               </button>
                             );
                           })}
                         </div>
                       </div>
-                    )}
-
-                    {/* Description */}
-                    <p className="text-[13px] leading-[1.65] text-ink-muted">
-                      {activeProduct.description}
-                    </p>
-
-                    {onOpenAI && (
-                      <button
-                        type="button"
-                        onClick={() => onOpenAI(activeProduct)}
-                        className="flex w-full items-center gap-3 rounded-xl border border-ink/8 bg-parchment/50 p-3.5 text-left transition-all active:scale-[0.99] hover:border-ink/14"
-                      >
-                        <Sparkles className="h-4 w-4 shrink-0 text-bronze" strokeWidth={1.75} />
-                        <span className="flex-1 text-sm font-medium text-ink">
-                          Ask AI about this piece
-                        </span>
-                      </button>
-                    )}
-
-                    {/* Add to cart */}
-                    {placedIds.has(activeProduct.id) && (
-                      <button
-                        type="button"
-                        onClick={() => handleRemovePlaced(activeProduct.id)}
-                        className="flex w-full items-center justify-center gap-2 rounded-full border border-ink/12 py-2.5 text-xs font-medium text-ink-muted transition-all active:scale-[0.99]"
-                      >
-                        <X className="h-3.5 w-3.5" strokeWidth={2} />
-                        Remove from room
-                      </button>
-                    )}
-
-                    <AddToCartButton
-                      variant="full"
-                      onClick={() => onAddToCart?.(activeProduct)}
-                    />
-                  </div>
-                )}
-                </div>
-
-                {activeProduct && (placedIds.has(activeProduct.id) || stagedIds.has(activeProduct.id)) && (
-                  <footer
-                    className="shrink-0 border-t border-ink/8 bg-cream/95 px-4 py-3 backdrop-blur-md"
-                    style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
-                  >
-                    <button
-                      type="button"
-                      onClick={handlePreview}
-                      disabled={step === 'generating' || (!canPreview && step !== 'result')}
-                      className={cn(
-                        'flex w-full items-center justify-center gap-2 rounded-full py-3.5 text-sm font-semibold transition-all active:scale-[0.99]',
-                        step === 'result'
-                          ? 'border border-ink/12 bg-parchment text-ink'
-                          : canPreview
-                            ? 'bg-bronze text-cream shadow-[0_4px_18px_rgba(184,114,58,0.28)]'
-                            : 'cursor-not-allowed bg-parchment text-ink/30'
-                      )}
+                    </motion.div>
+                  ) : (
+                    <motion.div
+                      key="tab-details"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.15 }}
+                      className="min-h-0 flex-1 overflow-y-auto overscroll-contain no-scrollbar px-4 py-2"
                     >
-                      {step === 'result' ? (
-                        <>
-                          <RotateCcw className="h-4 w-4" strokeWidth={1.75} />
-                          Regenerate
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="h-4 w-4" strokeWidth={2} />
-                          {productsForPreview.length > 1 ? 'Preview all' : 'Preview room'}
-                        </>
-                      )}
-                    </button>
-                  </footer>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </motion.div>
+                      {mobileDetailsPanel}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
+              {step !== 'pick' && (
+                <div className="shrink-0 border-t border-ink/6 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+                  <VisualizerProductBar
+                    layout="dock"
+                    catalog={catalog}
+                    stagedProducts={products}
+                    placedProducts={placedProducts}
+                    activeProduct={activeProduct}
+                    activeProductId={activeProductId}
+                    colorSelections={colorSelections}
+                    step={step}
+                    hasRoomPhoto
+                    hasLivePreview={hasLivePreview}
+                    pendingCount={pendingCount}
+                    pickCount={pickCount}
+                    canRunPreview={canRunPreview}
+                    isSilentUpdating={isSilentUpdating}
+                    onColorSelect={onColorSelect}
+                    onActiveProductChange={onActiveProductChange}
+                    onRemoveProduct={onRemoveProduct}
+                    onRemovePlacedProduct={handleRemovePlaced}
+                    onPreview={handlePreview}
+                    onAddToCart={onAddToCart}
+                  />
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
+      {curateIntentSheet}
+      </>
     );
   }
 
   // ─── DESKTOP LAYOUT (unchanged) ────────────────────────────────────────────
   return (
+    <>
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
@@ -1743,11 +1564,9 @@ export default function TryInMyRoomView({
                 >
                   <p className="font-medium text-lg text-ink">Upload a photo of your room</p>
                   <p className="mt-2 text-ink-muted">JPG or PNG · we&apos;ll tag furniture for you</p>
-                  {(hasSelection || hasPlaced) && (
+                  {pickCount > 0 && (
                     <p className="mt-3 text-xs font-medium text-bronze">
-                      {hasPlaced
-                        ? `${placedProducts.length} in your room`
-                        : `${products.length} product${products.length > 1 ? 's' : ''} ready to stage`}
+                      {pickCount} selected
                     </p>
                   )}
                 </motion.div>
@@ -1776,13 +1595,18 @@ export default function TryInMyRoomView({
       </motion.div>
 
       <VisualizerProductBar
+        catalog={catalog}
+        stagedProducts={products}
         placedProducts={placedProducts}
-        productsForPreview={productsForPreview}
         activeProduct={activeProduct}
         activeProductId={activeProductId}
         colorSelections={colorSelections}
         step={step}
-        canPreview={canPreview}
+        hasRoomPhoto={step !== 'pick'}
+        hasLivePreview={hasLivePreview}
+        pendingCount={pendingCount}
+        pickCount={pickCount}
+        canRunPreview={canRunPreview}
         isSilentUpdating={isSilentUpdating}
         onColorSelect={onColorSelect}
         onActiveProductChange={onActiveProductChange}
@@ -1792,5 +1616,7 @@ export default function TryInMyRoomView({
         onAddToCart={onAddToCart}
       />
     </motion.div>
+    {curateIntentSheet}
+    </>
   );
 }

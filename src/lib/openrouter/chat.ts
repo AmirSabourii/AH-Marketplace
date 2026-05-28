@@ -44,18 +44,43 @@ interface StreamCallbacks {
   onError: (message: string) => void;
 }
 
-function parseSseLine(line: string): string | null {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith('data:')) return null;
-  const data = trimmed.slice(5).trim();
+function extractStreamText(
+  json: Record<string, unknown>
+): string | null {
+  const choices = json.choices;
+  if (!Array.isArray(choices) || choices.length === 0) return null;
+
+  const choice = choices[0] as Record<string, unknown>;
+  const delta = choice.delta as Record<string, unknown> | undefined;
+  const message = choice.message as Record<string, unknown> | undefined;
+
+  if (typeof delta?.content === 'string') return delta.content;
+  if (typeof delta?.text === 'string') return delta.text;
+  if (typeof message?.content === 'string') return message.content;
+
+  return null;
+}
+
+function parseSseDataPayload(data: string): string | null {
   if (data === '[DONE]') return null;
   try {
-    const json = JSON.parse(data) as {
-      choices?: { delta?: { content?: string } }[];
-    };
-    return json.choices?.[0]?.delta?.content ?? null;
+    const json = JSON.parse(data) as Record<string, unknown>;
+    const text = extractStreamText(json);
+    return text && text.length > 0 ? text : null;
   } catch {
     return null;
+  }
+}
+
+function dispatchSseBlock(block: string, callbacks: StreamCallbacks): void {
+  for (const line of block.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith(':')) continue;
+    if (!trimmed.startsWith('data:')) continue;
+
+    const data = trimmed.slice(5).trim();
+    const token = parseSseDataPayload(data);
+    if (token) callbacks.onToken(token);
   }
 }
 
@@ -93,7 +118,7 @@ export async function streamOpenRouterChat(
         messages,
         stream: true,
         temperature: 0.65,
-        max_tokens: 1024,
+        max_tokens: 2048,
       }),
       signal,
     });
@@ -134,18 +159,18 @@ export async function streamOpenRouterChat(
       }
 
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
 
-      for (const line of lines) {
-        const token = parseSseLine(line);
-        if (token) callbacks.onToken(token);
+      let boundary = buffer.indexOf('\n\n');
+      while (boundary !== -1) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        if (block.trim()) dispatchSseBlock(block, callbacks);
+        boundary = buffer.indexOf('\n\n');
       }
     }
 
     if (buffer.trim()) {
-      const token = parseSseLine(buffer);
-      if (token) callbacks.onToken(token);
+      dispatchSseBlock(buffer, callbacks);
     }
 
     callbacks.onDone();

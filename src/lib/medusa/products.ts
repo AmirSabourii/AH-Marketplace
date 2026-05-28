@@ -5,7 +5,10 @@ import { getMedusaBackendUrl, getMedusaPublishableKey } from './config';
 export type CatalogItem = {
   product: Product;
   categoryId: CategoryId;
+  /** Staged lifestyle image for grid / product sheet hero. */
   displayImage: string;
+  /** White-background catalog image for room compositing. */
+  catalogImage: string;
 };
 
 type ApiCatalogProduct = {
@@ -14,32 +17,48 @@ type ApiCatalogProduct = {
   price: string;
   description: string;
   image: string;
+  stagedImage?: string;
+  catalogImage?: string;
+  gallery?: string[];
   categoryId: CategoryId;
 };
 
+function missingPublishableKeyError(): Error {
+  const hint = import.meta.env.DEV
+    ? 'Add VITE_MEDUSA_PUBLISHABLE_KEY to .env (run `npm run publishable-key` in apps/backend), then restart Vite.'
+    : 'Set VITE_MEDUSA_PUBLISHABLE_KEY in your deployment environment.';
+  return new Error(`Medusa publishable API key is missing. ${hint}`);
+}
+
 function medusaStoreHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {
-    Accept: 'application/json',
-  };
   const key = getMedusaPublishableKey();
-  if (key) headers['x-publishable-api-key'] = key;
-  return headers;
+  if (!key) throw missingPublishableKeyError();
+
+  return {
+    Accept: 'application/json',
+    'x-publishable-api-key': key,
+  };
 }
 
 function mapApiProduct(row: ApiCatalogProduct): CatalogItem {
+  const staged = row.stagedImage?.trim() || row.image?.trim() || '';
+  const catalog = row.catalogImage?.trim() || staged;
+
   const product: Product = {
     id: row.id,
     name: row.name,
     price: row.price || '—',
     description: row.description,
-    image: row.image,
+    image: catalog,
     anchorX: 0.5,
     anchorY: 0.5,
   };
+
   return {
     product,
     categoryId: row.categoryId,
-    displayImage: row.image,
+    displayImage: staged,
+    catalogImage: catalog,
   };
 }
 
@@ -63,6 +82,7 @@ export async function fetchMarketplaceCatalog(
     const json = (await res.json().catch(() => ({}))) as {
       error?: string;
       message?: string;
+      type?: string;
     };
     throw new Error(
       json.error || json.message || `Failed to load products (${res.status})`
@@ -70,7 +90,9 @@ export async function fetchMarketplaceCatalog(
   }
 
   const json = (await res.json()) as { products?: ApiCatalogProduct[] };
-  return (json.products ?? []).map(mapApiProduct);
+  return (json.products ?? [])
+    .map(mapApiProduct)
+    .filter((item) => item.displayImage.length > 0);
 }
 
 export function findProductInCatalog(

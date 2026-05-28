@@ -1,5 +1,10 @@
 import type { CategoryId } from '../../data/categories';
 import { getGeminiApiKey } from './apiKey';
+import {
+  applyCurateIntentToBrief,
+  formatCurateIntentForPrompt,
+  type CurateIntent,
+} from './curateIntent';
 import { fileToInlineImage, type InlineImagePayload } from './imageUtils';
 
 const BRIEF_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash'] as const;
@@ -35,12 +40,16 @@ interface GeminiTextResponse {
   error?: { message?: string };
 }
 
-function buildRoomBriefPrompt(): string {
+function buildRoomBriefPrompt(userIntent?: CurateIntent): string {
+  const customerBlock = formatCurateIntentForPrompt(
+    userIntent ?? { wish: '' }
+  );
+
   return `You are a senior residential interior designer. Study the customer's room photo and produce a concise staging brief for our furniture store.
 
 INPUT
 - Image 1: Customer room photograph.
-
+${customerBlock ? `\n${customerBlock}\n` : ''}
 TASK — analyze before any product decisions
 1. Room type: living room, bedroom, dining, home office, studio, entryway, kids room, etc.
 2. Architectural style: modern, mid-century, scandi, japandi, industrial, traditional, farmhouse, transitional, mediterranean, eclectic…
@@ -115,6 +124,7 @@ function parseBriefJson(text: string): RoomCurateBrief | null {
 
 async function callGeminiBrief(
   roomImage: InlineImagePayload,
+  userIntent?: CurateIntent,
   signal?: AbortSignal
 ): Promise<string> {
   const apiKey = getGeminiApiKey();
@@ -122,7 +132,10 @@ async function callGeminiBrief(
     contents: [
       {
         role: 'user',
-        parts: [{ text: buildRoomBriefPrompt() }, { inlineData: roomImage }],
+        parts: [
+          { text: buildRoomBriefPrompt(userIntent) },
+          { inlineData: roomImage },
+        ],
       },
     ],
     generationConfig: {
@@ -174,27 +187,34 @@ async function callGeminiBrief(
 /** Infer room type, palette, gaps, and which store categories belong in this space. */
 export async function analyzeRoomForCurate(
   roomFile: File,
-  options?: { signal?: AbortSignal }
+  options?: { signal?: AbortSignal; userIntent?: CurateIntent }
 ): Promise<RoomCurateBrief> {
   const roomImage = await fileToInlineImage(roomFile);
-  const raw = await callGeminiBrief(roomImage, options?.signal);
+  const raw = await callGeminiBrief(
+    roomImage,
+    options?.userIntent,
+    options?.signal
+  );
   const parsed = parseBriefJson(raw);
 
-  if (parsed) return parsed;
+  if (parsed) return applyCurateIntentToBrief(parsed, options?.userIntent);
 
-  return {
-    roomType: 'living room',
-    style: 'transitional',
-    colorPalette: 'neutral walls and warm wood tones',
-    lighting: 'natural window light',
-    scale: 'medium',
-    focalPoint: 'main window wall',
-    existingItems: 'furniture visible in the uploaded photo',
-    gapsToFill: 'seating, surface, rug, and accent lighting',
-    categories: ['sofa', 'rug', 'table', 'lamp'],
-    stagingNotes:
-      'Stage a cohesive seating zone with catalog pieces that harmonize with existing wall and floor colors.',
-  };
+  return applyCurateIntentToBrief(
+    {
+      roomType: 'living room',
+      style: 'transitional',
+      colorPalette: 'neutral walls and warm wood tones',
+      lighting: 'natural window light',
+      scale: 'medium',
+      focalPoint: 'main window wall',
+      existingItems: 'furniture visible in the uploaded photo',
+      gapsToFill: 'seating, surface, rug, and accent lighting',
+      categories: ['sofa', 'rug', 'table', 'lamp'],
+      stagingNotes:
+        'Stage a cohesive seating zone with catalog pieces that harmonize with existing wall and floor colors.',
+    },
+    options?.userIntent
+  );
 }
 
 export function formatRoomBriefForStaging(brief: RoomCurateBrief): string {

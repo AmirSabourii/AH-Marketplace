@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { CategoryId } from '../data/categories';
+import { getCatalogSource } from '../lib/catalog/config';
+import { fetchMockCatalog } from '../lib/catalog/mockCatalog';
 import {
   fetchMarketplaceCatalog,
   type CatalogItem,
@@ -11,6 +13,13 @@ type CatalogState = {
   error: string | null;
   refresh: () => void;
 };
+
+async function loadCatalog(): Promise<CatalogItem[]> {
+  if (getCatalogSource() === 'mock') {
+    return fetchMockCatalog();
+  }
+  return fetchMarketplaceCatalog('all');
+}
 
 /**
  * Fetches the full marketplace catalog once; category filtering is client-side.
@@ -24,7 +33,7 @@ export function useCatalogProducts(): CatalogState {
     setLoading(true);
     setError(null);
     try {
-      const catalog = await fetchMarketplaceCatalog('all');
+      const catalog = await loadCatalog();
       setItems(catalog);
     } catch (e) {
       const message =
